@@ -13,21 +13,29 @@ et de ses vérifications est dans [`Source/emu/README.md`](Source/emu/README.md)
 
 ## Installation sur Mac
 
-### Par GitHub (le plus simple)
+1. Sur la page du dépôt, rubrique **Releases** (colonne de droite), ouvre
+   **Tresses — installateur Mac** et télécharge **Tresses-Installateur.pkg**.
+2. Double-clique dessus. La première fois, macOS refuse de l'ouvrir, car Tresses
+   n'est pas signé par Apple : clique sur **OK**.
+3. Ouvre **Réglages Système > Confidentialité et sécurité**, descends jusqu'au
+   message sur Tresses-Installateur et clique sur **Ouvrir quand même**, puis confirme.
+4. Suis l'installateur : **Continuer**, **Installer**, ton mot de passe de session.
+5. Relance Reason : Tresses est dans le navigateur, rubrique **Plugins**, fabricant
+   **Labtechno**.
 
-GitHub compile le VST3 à chaque envoi sur le dépôt, ou à la demande : onglet
-**Actions** → **Build macOS** → **Run workflow**.
+L'installateur pose le plugin VST3 (dans `/Library/Audio/Plug-Ins/VST3`), l'application
+Tresses (dans Applications, pour jouer sans Reason) et deux firmwares à essayer (dans
+*Utilisateurs > Partagé > Tresses > Firmwares*). Pour mettre à jour, relance
+simplement un installateur plus récent.
 
-1. Ouvre le dernier « run » réussi (coche verte) de l'onglet **Actions**.
-2. En bas de la page, rubrique **Artifacts**, télécharge **Tresses-macOS**.
-3. Dézippe le fichier téléchargé, puis le `Tresses-macOS.zip` qu'il contient.
-4. Dans le Terminal, tape `cd ` (avec un espace), glisse le dossier `Tresses`
-   obtenu dans la fenêtre, appuie sur Entrée, puis tape : `bash install_mac.sh`
-5. Relance Reason : Tresses est dans **Plugins**, fabricant **Labtechno**.
+GitHub fabrique un nouvel installateur à chaque modification du projet : la page
+Releases donne toujours la dernière version.
 
-### En compilant sur ton Mac
+**Désinstaller** : supprime `Tresses.vst3` dans `/Library/Audio/Plug-Ins/VST3`,
+`Tresses.app` dans Applications et le dossier `/Users/Shared/Tresses`.
 
-Dans le Terminal, depuis le dossier du projet : `bash build_mac.sh`
+**Compiler soi-même** (pour les développeurs) : `bash build_mac.sh` dans le Terminal,
+depuis le dossier du projet.
 
 ---
 

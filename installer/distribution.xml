@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Tresses @VERSION@</title>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <options customize="allow" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/>
+    <os-version min="11.0"/>
+    <choices-outline>
+        <line choice="vst3"/>
+        <line choice="app"/>
+        <line choice="firmwares"/>
+    </choices-outline>
+    <choice id="vst3" title="Plugin VST3 (pour Reason)"
+            description="Tresses.vst3, dans /Library/Audio/Plug-Ins/VST3.">
+        <pkg-ref id="com.labtechno.tresses.vst3"/>
+    </choice>
+    <choice id="app" title="Application Tresses"
+            description="Tresses sans Reason, dans le dossier Applications.">
+        <pkg-ref id="com.labtechno.tresses.app"/>
+    </choice>
+    <choice id="firmwares" title="Firmwares"
+            description="Braids 1.9 et Bees-in-the-Trees 4.1, dans /Users/Shared/Tresses/Firmwares.">
+        <pkg-ref id="com.labtechno.tresses.firmwares"/>
+    </choice>
+    <pkg-ref id="com.labtechno.tresses.vst3" version="@VERSION@">vst3.pkg</pkg-ref>
+    <pkg-ref id="com.labtechno.tresses.app" version="@VERSION@">app.pkg</pkg-ref>
+    <pkg-ref id="com.labtechno.tresses.firmwares" version="@VERSION@">firmwares.pkg</pkg-ref>
+</installer-gui-script>

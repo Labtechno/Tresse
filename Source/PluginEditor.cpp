@@ -733,10 +733,17 @@ void TressesAudioProcessorEditor::showFirmwareMenu() {
                      });
 }
 
+// Dossier proposé à l'ouverture : celui où l'installateur range les firmwares.
+static juce::File firmwareFolder() {
+  const juce::File installed("/Users/Shared/Tresses/Firmwares");
+  if (installed.isDirectory()) return installed;
+  return juce::File::getSpecialLocation(juce::File::userHomeDirectory);
+}
+
 void TressesAudioProcessorEditor::chooseFirmwareFile() {
   fileChooser_ = std::make_unique<juce::FileChooser>(
       juce::String::fromUTF8("Choisir un firmware pour Braids (.bin ou .wav de mise à jour)"),
-      juce::File::getSpecialLocation(juce::File::userHomeDirectory), "*.bin;*.wav");
+      firmwareFolder(), "*.bin;*.wav");
   fileChooser_->launchAsync(
       juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
       [safe = juce::Component::SafePointer<TressesAudioProcessorEditor>(this)](const juce::FileChooser& chooser) {

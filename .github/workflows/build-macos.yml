@@ -1,17 +1,22 @@
-# Compile le plugin VST3 sur un Mac de GitHub, à chaque envoi (push) ou à la
-# demande (onglet Actions > Build macOS > Run workflow).
+# Compile Tresses sur un Mac de GitHub et fabrique l'installateur, à chaque envoi
+# (push) ou à la demande (onglet Actions > Build macOS > Run workflow).
 #
-# Résultat : en bas de la page du "run", rubrique Artifacts : Tresses-macOS.
-# Le zip contient le .vst3 (Apple Silicon + Intel) et install_mac.sh.
+# Résultat :
+#   - page « Releases » du dépôt : Tresses-Installateur.pkg (dernière version de la
+#     branche emulation) ;
+#   - en bas de la page du « run », rubrique Artifacts : le même installateur.
 name: Build macOS
 
 on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write   # pour publier l'installateur dans « Releases »
+
 jobs:
   build:
-    name: VST3
+    name: Installateur Mac
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -19,24 +24,46 @@ jobs:
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
 
-      - name: Build VST3
-        run: cmake --build build --config Release --target Tresses_VST3 -j 4
+      - name: Build VST3 et application
+        run: cmake --build build --config Release --target Tresses_VST3 Tresses_Standalone -j 4
 
-      - name: Package
+      - name: Installateur
+        run: bash installer/build_pkg.sh build/Tresses_artefacts/Release Tresses-Installateur.pkg
+
+      - name: Essai de l'installateur sur ce Mac
         run: |
-          mkdir -p dist/Tresses/VST3
-          cp -R build/Tresses_artefacts/Release/VST3/*.vst3 dist/Tresses/VST3/
-          cp install_mac.sh dist/Tresses/
-          # Deux images de firmware à charger depuis le bouton Firmware du plugin.
-          mkdir -p dist/Tresses/Firmwares
-          cp firmware/bin/braids-1.9.bin firmware/bin/bees-in-the-trees-4.1.bin dist/Tresses/Firmwares/
-          codesign --force --deep --sign - dist/Tresses/VST3/*.vst3
-          codesign --verify --deep --verbose=2 dist/Tresses/VST3/*.vst3
-          # ditto conserve les droits d'exécution dans le bundle (un simple
-          # upload d'artefact les perdrait).
-          ditto -c -k --keepParent dist/Tresses Tresses-macOS.zip
+          sudo installer -pkg Tresses-Installateur.pkg -target /
+          test -d /Library/Audio/Plug-Ins/VST3/Tresses.vst3
+          test -d /Applications/Tresses.app
+          ls -l /Users/Shared/Tresses/Firmwares
+          codesign --verify --deep --verbose=2 /Library/Audio/Plug-Ins/VST3/Tresses.vst3
+          lipo -info /Library/Audio/Plug-Ins/VST3/Tresses.vst3/Contents/MacOS/Tresses
+          pkgutil --pkgs | grep labtechno
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Tresses-macOS
-          path: Tresses-macOS.zip
+          name: Tresses-Installateur
+          path: Tresses-Installateur.pkg
+
+      - name: Publication dans « Releases »
+        if: github.ref == 'refs/heads/emulation'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(sed -n 's/^project(Tresses VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          cat > notes.md <<EOF
+          Version $VERSION, compilée le $(date -u '+%d/%m/%Y') depuis la branche emulation (${GITHUB_SHA::7}).
+
+          ## Installation
+
+          1. Télécharge **Tresses-Installateur.pkg** ci-dessous.
+          2. Double-clique dessus. macOS refuse la première fois, car Tresses n'est pas signé par Apple : clique sur **OK**.
+          3. Ouvre **Réglages Système > Confidentialité et sécurité**, descends jusqu'au message sur Tresses-Installateur et clique sur **Ouvrir quand même**, puis confirme.
+          4. Suis l'installateur : Continuer, Installer, ton mot de passe de session.
+          5. Relance Reason : Tresses est dans **Plugins**, fabricant **Labtechno**.
+
+          Les firmwares fournis sont dans *Utilisateurs > Partagé > Tresses > Firmwares*.
+          EOF
+          gh release delete derniere-version --yes --cleanup-tag 2>/dev/null || true
+          gh release create derniere-version Tresses-Installateur.pkg \
+            --target "$GITHUB_SHA" --title "Tresses $VERSION — installateur Mac" --notes-file notes.md --latest
