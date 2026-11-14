@@ -1,12 +1,8 @@
-# Compile les plugins VST3 sur un Mac de GitHub, à chaque envoi (push) ou à la
+# Compile le plugin VST3 sur un Mac de GitHub, à chaque envoi (push) ou à la
 # demande (onglet Actions > Build macOS > Run workflow).
 #
-# Deux compilations en parallèle :
-#   - Tresses       (firmware officiel Braids v1.9)
-#   - Tresses Bees  (firmware Bees-in-the-Trees v4.1)
-#
-# Résultat : en bas de la page du "run", rubrique Artifacts, un zip par version.
-# Il contient le .vst3 (Apple Silicon + Intel) et install_mac.sh.
+# Résultat : en bas de la page du "run", rubrique Artifacts : Tresses-macOS.
+# Le zip contient le .vst3 (Apple Silicon + Intel) et install_mac.sh.
 name: Build macOS
 
 on:
@@ -15,20 +11,13 @@ on:
 
 jobs:
   build:
-    name: VST3 (${{ matrix.firmware }})
+    name: VST3
     runs-on: macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        firmware: [braids, bees]
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-                -DTRESSES_FIRMWARE=${{ matrix.firmware }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
 
       - name: Build VST3
         run: cmake --build build --config Release --target Tresses_VST3 -j 4
@@ -42,9 +31,9 @@ jobs:
           codesign --verify --deep --verbose=2 dist/Tresses/VST3/*.vst3
           # ditto conserve les droits d'exécution dans le bundle (un simple
           # upload d'artefact les perdrait).
-          ditto -c -k --keepParent dist/Tresses "Tresses-${{ matrix.firmware }}-macOS.zip"
+          ditto -c -k --keepParent dist/Tresses Tresses-macOS.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Tresses-${{ matrix.firmware }}-macOS
-          path: Tresses-${{ matrix.firmware }}-macOS.zip
+          name: Tresses-macOS
+          path: Tresses-macOS.zip

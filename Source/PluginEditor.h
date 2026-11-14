@@ -53,19 +53,18 @@ class Knob : public juce::Component {
   std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment_;
 };
 
-// Afficheur 4 caractères 14 segments, dessiné avec la police du firmware.
+// Afficheur 4 caractères 14 segments : les segments allumés viennent directement
+// du registre à décalage que pilote le firmware.
 class SegmentDisplay : public juce::Component {
  public:
-  void setFont(const uint16_t* font) { font_ = font; }
-  void setState(const tresses::DisplayState& state);
+  void setState(const tresses::emu::BraidsMachine::Display& state);
   void paint(juce::Graphics&) override;
 
  private:
   void paintDigit(juce::Graphics&, juce::Rectangle<float> cell, uint16_t segments,
                   float intensity) const;
 
-  const uint16_t* font_ = nullptr;
-  tresses::DisplayState state_ { { ' ', ' ', ' ', ' ' }, 3 };
+  tresses::emu::BraidsMachine::Display state_ { { 0, 0, 0, 0 }, 0.0f };
 };
 
 // Encodeur cranté sans butée, avec bouton-poussoir.
@@ -145,6 +144,7 @@ class TressesAudioProcessorEditor : public juce::AudioProcessorEditor,
   juce::TooltipWindow tooltips_ { this, 600 };
 
   juce::Rectangle<int> moduleArea_, interfaceArea_;
+  int shownLoad_ = -1;
 
   ui::SegmentDisplay display_;
   ui::Encoder encoder_;

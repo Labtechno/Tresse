@@ -6,10 +6,18 @@ Tresses, en émulant le STM32F103 du module au lieu de recompiler le code source
 | Étape | Contenu | État |
 |---|---|---|
 | 1 | Processeur Cortex-M3 (`CortexM3.*`) : instructions Thumb/Thumb-2, exceptions, NVIC, SysTick, comptage des cycles | fait |
-| 2 | Périphériques du STM32F103 utilisés par Braids, démarrage du `.bin` officiel | à faire |
+| 2 | Périphériques du STM32F103 et carte Braids (`BraidsMachine.*`), firmware complet, plugin branché dessus | fait |
 | 3 | Chargement des fichiers depuis l'interface, flash par firmware | à faire |
 | 4 | Temps d'accès à la flash, jauge de charge, craquements réalistes | à faire |
 | 5 | Autres firmwares, optimisation, compilation sur GitHub | à faire |
+
+## Vérifier le module complet
+
+Voir la section « Vérifications » du README principal (`tresses_machine_test`).
+
+L'émulateur saute les boucles d'attente du firmware (quand le programme tourne en
+rond sans rien modifier en attendant une interruption). Le résultat est strictement
+identique, et la part de temps ainsi sautée donne la charge du processeur.
 
 ## Vérifier le processeur
 

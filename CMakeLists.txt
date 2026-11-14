@@ -17,49 +17,30 @@ endif()
 option(TRESSES_BUILD_PLUGIN "Compiler le plugin (VST3, AU, Standalone) avec JUCE" ON)
 option(TRESSES_BUILD_TOOLS "Compiler les outils de test hors plugin (tools/)" OFF)
 
-# --- Firmware du module virtuel -------------------------------------------------------
-# Le module virtuel exécute le firmware complet (braids.cc, ui.cc, settings.cc et
-# le DSP) à partir de ses sources.
-#   -DTRESSES_FIRMWARE=braids : firmware officiel Braids v1.9 (plugin "Tresses")
-#   -DTRESSES_FIRMWARE=bees   : Bees-in-the-Trees v4.1 (plugin "Tresses Bees")
-# Pour ton propre firmware : modifie les sources dans firmware/, ou passe
-# -DBRAIDS_FIRMWARE_DIR=/chemin/vers/ton/fork (dossier contenant braids/ et stmlib/).
-set(TRESSES_FIRMWARE "braids" CACHE STRING "Firmware du module : braids ou bees")
-set_property(CACHE TRESSES_FIRMWARE PROPERTY STRINGS braids bees)
+# --- Firmware ---------------------------------------------------------------------------
+# Le plugin émule la puce du module (Source/emu) et exécute une image binaire de
+# firmware. Celle qui est intégrée au plugin :
+#   firmware/bin/braids-1.9.bin          Braids v1.9, compilé depuis firmware/eurorack
+#   firmware/bin/braids-1.9.factory.bin  ses réglages d'usine (calibration CAL faite)
+set(TRESSES_PRODUCT_NAME "Tresses")
+set(TRESSES_FIRMWARE_LABEL "firmware Braids v1.9")
+set(TRESSES_FIRMWARE_CREDIT "Firmware Braids v1.9 © Emilie Gillet, licence MIT.")
 
-if(TRESSES_FIRMWARE STREQUAL "bees")
-  set(default_firmware_dir "${CMAKE_CURRENT_SOURCE_DIR}/firmware/bees-in-the-trees")
-  set(TRESSES_PRODUCT_NAME "Tresses Bees")
-  set(TRESSES_PLUGIN_CODE TrBz)
-  set(TRESSES_BUNDLE_ID "com.labtechno.tresses-bees")
-  set(default_label "firmware Bees-in-the-Trees v4.1")
-  set(default_credit "Firmware Bees-in-the-Trees © Tim Churches, d'après Braids © Emilie Gillet, licence MIT.")
-else()
-  set(default_firmware_dir "${CMAKE_CURRENT_SOURCE_DIR}/firmware/eurorack")
-  set(TRESSES_PRODUCT_NAME "Tresses")
-  set(TRESSES_PLUGIN_CODE Tres)
-  set(TRESSES_BUNDLE_ID "com.labtechno.tresses")
-  set(default_label "firmware Braids v1.9")
-  set(default_credit "Firmware Braids v1.9 © Emilie Gillet, licence MIT.")
+# Référence pour les tests : le même firmware recompilé pour l'ordinateur (Source/hw).
+set(BRAIDS_FIRMWARE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/firmware/eurorack"
+    CACHE PATH "Sources du firmware de référence (dossier contenant braids/ et stmlib/)")
+if(TRESSES_BUILD_TOOLS)
+  include(cmake/TressesFirmwareSlots.cmake)
+  tresses_add_firmware_slots(tresses_module "${BRAIDS_FIRMWARE_DIR}" 2)
 endif()
 
-if(NOT BRAIDS_FIRMWARE_DIR)
-  set(BRAIDS_FIRMWARE_DIR "${default_firmware_dir}")
+# --- Puce virtuelle : exécute une image binaire de firmware (Source/emu) ------------------
+add_library(tresses_emu STATIC Source/emu/CortexM3.cpp Source/emu/BraidsMachine.cpp)
+target_include_directories(tresses_emu PUBLIC Source/emu)
+set_target_properties(tresses_emu PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(NOT MSVC)
+  target_compile_options(tresses_emu PRIVATE -O3)
 endif()
-if(NOT TRESSES_FIRMWARE_LABEL)
-  set(TRESSES_FIRMWARE_LABEL "${default_label}")
-endif()
-if(NOT TRESSES_FIRMWARE_CREDIT)
-  set(TRESSES_FIRMWARE_CREDIT "${default_credit}")
-endif()
-message(STATUS "Tresses : ${TRESSES_PRODUCT_NAME}, firmware dans ${BRAIDS_FIRMWARE_DIR}")
-
-# Nombre maximal de Tresses ouverts en même temps dans un projet (une copie du
-# firmware par instance).
-set(TRESSES_MAX_INSTANCES 16 CACHE STRING "Nombre maximal d'instances simultanées")
-
-include(cmake/TressesFirmwareSlots.cmake)
-tresses_add_firmware_slots(tresses_module "${BRAIDS_FIRMWARE_DIR}" ${TRESSES_MAX_INSTANCES})
 
 # --- Plugin ---------------------------------------------------------------------------
 if(TRESSES_BUILD_PLUGIN)
@@ -79,9 +60,9 @@ if(TRESSES_BUILD_PLUGIN)
   juce_add_plugin(Tresses
     PRODUCT_NAME "${TRESSES_PRODUCT_NAME}"
     COMPANY_NAME "Labtechno"
-    BUNDLE_ID "${TRESSES_BUNDLE_ID}"
+    BUNDLE_ID "com.labtechno.tresses"
     PLUGIN_MANUFACTURER_CODE Labt
-    PLUGIN_CODE ${TRESSES_PLUGIN_CODE}
+    PLUGIN_CODE Tres
     FORMATS VST3 AU Standalone
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
@@ -110,9 +91,15 @@ if(TRESSES_BUILD_PLUGIN)
        @ONLY)
   target_include_directories(Tresses PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
+  juce_add_binary_data(TressesFirmware SOURCES
+    firmware/bin/braids-1.9.bin
+    firmware/bin/braids-1.9.factory.bin)
+  set_target_properties(TressesFirmware PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
   target_link_libraries(Tresses
     PRIVATE
-      tresses_module
+      tresses_emu
+      TressesFirmware
       juce::juce_audio_utils
     PUBLIC
       juce::juce_recommended_config_flags
@@ -124,6 +111,8 @@ endif()
 if(TRESSES_BUILD_TOOLS)
   add_executable(tresses_module_test tools/module_test.cpp)
   target_link_libraries(tresses_module_test PRIVATE tresses_module)
+  add_executable(tresses_machine_test tools/machine_test.cpp)
+  target_link_libraries(tresses_machine_test PRIVATE tresses_module tresses_emu)
   if(NOT WIN32)
     find_package(Threads REQUIRED)
     target_link_libraries(tresses_module_test PRIVATE Threads::Threads)

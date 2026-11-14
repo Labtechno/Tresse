@@ -1,7 +1,7 @@
 // Tresses — processeur audio.
 //
-// Le plugin héberge un module Braids virtuel (Source/hw) : le firmware complet
-// tourne sur des drivers émulés. Le plugin ne fait que trois choses :
+// Le plugin héberge un module Braids émulé (Source/emu) : une puce STM32F103
+// virtuelle exécute l'image binaire du firmware. Le plugin ne fait que trois choses :
 //   1. transformer la position des potards et les tensions des jacks en codes
 //      ADC (étage analogique virtuel) ;
 //   2. jouer le rôle d'une interface MIDI -> CV branchée sur les jacks ;
@@ -16,7 +16,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "AnalogFrontEnd.h"
-#include "FirmwareSlot.h"
+#include "BraidsMachine.h"
 #include "Resampler.h"
 
 namespace ids {
@@ -44,7 +44,7 @@ enum class CvSource : int { kNone = 0, kModWheel, kVelocity, kAftertouch, kAutom
 class TressesAudioProcessor : public juce::AudioProcessor {
  public:
   TressesAudioProcessor();
-  ~TressesAudioProcessor() override;
+  ~TressesAudioProcessor() override = default;
 
   void prepareToPlay(double sampleRate, int samplesPerBlock) override;
   void releaseResources() override {}
@@ -75,15 +75,16 @@ class TressesAudioProcessor : public juce::AudioProcessor {
   // --- Pour l'interface ----------------------------------------------------------
   juce::AudioProcessorValueTreeState apvts;
 
-  bool hasModule() const { return module_ != nullptr; }
-  const uint16_t* font() const { return module_ ? module_->font : nullptr; }
-
   // Encodeur : crans (+ = horaire) et bouton, appliqués au bloc audio suivant.
   void encoderTurn(int steps) { encoderSteps_.fetch_add(steps); }
   void encoderPress(bool pressed) { encoderPressed_.store(pressed); }
 
-  // Dernier état de l'afficheur : 4 caractères + luminosité.
-  tresses::DisplayState display() const;
+  // Afficheur : segments allumés de chaque caractère et luminosité (0..1).
+  tresses::emu::BraidsMachine::Display display() const;
+
+  // Occupation du processeur du module (0..1), et arrêt éventuel sur erreur.
+  float moduleLoad() const { return moduleLoad_.load(); }
+  bool moduleCrashed() const { return moduleCrashed_.load(); }
 
   // Activité des jacks, pour les LED de l'interface (0..1 ou -1..1).
   struct JackMeters {
@@ -92,7 +93,7 @@ class TressesAudioProcessor : public juce::AudioProcessor {
   JackMeters jackMeters() const;
 
  private:
-  void powerOn(const uint8_t* flash, size_t flashSize, bool factoryCalibrate);
+  void powerOn(const uint8_t* settings, size_t settingsSize);
   void readPanel();
   void handleMidi(const juce::MidiMessage& message);
   void updateJacks();
@@ -117,9 +118,8 @@ class TressesAudioProcessor : public juce::AudioProcessor {
     std::atomic<float>* bendRange = nullptr;
   } raw_;
 
-  // Module virtuel (un slot du firmware réservé pour cette instance).
-  int slot_ = -1;
-  const tresses::FirmwareSlotApi* module_ = nullptr;
+  // Module émulé.
+  tresses::emu::BraidsMachine machine_;
   uint32_t uid_[3] = { 0, 0, 0 };
   juce::SpinLock moduleLock_;
 
@@ -140,6 +140,10 @@ class TressesAudioProcessor : public juce::AudioProcessor {
   std::atomic<int> encoderSteps_ { 0 };
   std::atomic<bool> encoderPressed_ { false };
   std::atomic<uint64_t> displayWord_ { 0 };
+  std::atomic<float> displayBrightness_ { 0.0f };
+  std::atomic<float> moduleLoad_ { 0.0f };
+  std::atomic<bool> moduleCrashed_ { false };
+  uint64_t loadCycles_ = 0, loadIdle_ = 0;
   std::array<std::atomic<float>, 6> meters_ {};
   float outPeak_ = 0.0f;
 

@@ -49,7 +49,7 @@ void ResetFirmwareRam() {
   trigger_detected_flag = false;
   trigger_flag = false;
   trigger_delay = 0;
-  stmlib::Random::Seed(0);
+  stmlib::Random::Seed(0x21);  // valeur initiale dans stmlib/utils/random.cc
 #if TRESSES_FIRMWARE_BEES
   ZeroObject(envelope2);
   sh_pitch = 0;

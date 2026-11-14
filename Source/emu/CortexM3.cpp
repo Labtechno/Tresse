@@ -138,21 +138,37 @@ uint32_t CortexM3::read8(uint32_t a) {
   return slowRead(a, 1);
 }
 
+// Les écritures en RAM notent si la valeur a réellement changé : une boucle
+// d'attente réécrit sans cesse les mêmes valeurs (pile), ce qui ne compte pas.
 void CortexM3::write32(uint32_t a, uint32_t v) {
   const uint32_t o = a - kRamBase;
-  if (o <= ramSize_ - 4) { std::memcpy(&ram_[o], &v, 4); return; }
+  if (o <= ramSize_ - 4) {
+    uint32_t old;
+    std::memcpy(&old, &ram_[o], 4);
+    if (old != v) { std::memcpy(&ram_[o], &v, 4); stateChanged_ = true; }
+    return;
+  }
   slowWrite(a, v, 4);
 }
 
 void CortexM3::write16(uint32_t a, uint32_t v) {
   const uint32_t o = a - kRamBase;
-  if (o <= ramSize_ - 2) { const uint16_t h = static_cast<uint16_t>(v); std::memcpy(&ram_[o], &h, 2); return; }
+  if (o <= ramSize_ - 2) {
+    const uint16_t h = static_cast<uint16_t>(v);
+    uint16_t old;
+    std::memcpy(&old, &ram_[o], 2);
+    if (old != h) { std::memcpy(&ram_[o], &h, 2); stateChanged_ = true; }
+    return;
+  }
   slowWrite(a, v & 0xffff, 2);
 }
 
 void CortexM3::write8(uint32_t a, uint32_t v) {
   const uint32_t o = a - kRamBase;
-  if (o < ramSize_) { ram_[o] = static_cast<uint8_t>(v); return; }
+  if (o < ramSize_) {
+    if (ram_[o] != static_cast<uint8_t>(v)) { ram_[o] = static_cast<uint8_t>(v); stateChanged_ = true; }
+    return;
+  }
   slowWrite(a, v & 0xff, 1);
 }
 
@@ -163,6 +179,7 @@ uint32_t CortexM3::slowRead(uint32_t a, int size) {
     std::memcpy(&v, &flash_[a], static_cast<size_t>(size));
     return v;
   }
+  stateChanged_ = true;  // lecture d'un périphérique : peut dépendre du temps
   if ((a & 0xfffff000u) == 0xe000e000u) {
     const uint32_t word = scsRead(a & ~3u);
     const uint32_t shifted = word >> (8 * (a & 3));
@@ -179,6 +196,7 @@ uint32_t CortexM3::slowRead(uint32_t a, int size) {
 }
 
 void CortexM3::slowWrite(uint32_t a, uint32_t v, int size) {
+  stateChanged_ = true;
   if ((a & 0xfffff000u) == 0xe000e000u) {
     if (size == 4) { scsWrite(a, v); return; }
     // Registres de priorité : accès par octet.
@@ -463,6 +481,7 @@ uint32_t CortexM3::xpsr() const {
 }
 
 void CortexM3::exceptionEntry(int number, uint32_t returnAddress) {
+  stateChanged_ = true;
   uint32_t sp = r_[13];
   uint32_t align = 0;
   if ((ccr_ & 0x200) && (sp & 4)) { sp -= 4; align = 1; }
@@ -549,6 +568,7 @@ void CortexM3::reset() {
   systickRefCycle_ = cycles_;
   systickNextFire_ = ~uint64_t { 0 };
   exclusive_ = false; halted_ = false; haltReason_ = ""; faultPc_ = 0;
+  snapshot_ = LoopSnapshot(); stateChanged_ = true;
   updateNextEvent();
   r_[13] = slowRead(0, 4) & ~3u;
   pc_ = slowRead(4, 4) & ~1u;
@@ -559,8 +579,11 @@ void CortexM3::reset() {
 // --- Exécution --------------------------------------------------------------------------
 
 void CortexM3::run(uint64_t untilCycle) {
+  stopRequested_ = false;
+  runLimit_ = untilCycle;
   while (cycles_ < untilCycle && !halted_) {
     if (cycles_ >= nextEvent_) serviceDeadlines();
+    if (stopRequested_) { stopRequested_ = false; irqDirty_ = true; return; }
     if (irqDirty_) checkInterrupts();
     if (sleeping_) {
       // WFI : le processeur attend la prochaine interruption.
@@ -602,6 +625,40 @@ uint32_t CortexM3::addWithCarry(uint32_t x, uint32_t y, uint32_t carryIn, bool s
 void CortexM3::branchTo(uint32_t address) {
   nextPc_ = address & ~1u;
   cycles_ += 2;
+}
+
+// Branchement direct. S'il revient en arrière au même endroit que la fois
+// précédente, avec exactement les mêmes registres et sans que rien n'ait changé
+// en mémoire entre-temps, le programme est dans une boucle d'attente : chaque tour
+// sera identique jusqu'à la prochaine interruption. On avance alors d'un nombre
+// entier de tours, ce qui donne exactement le même état qu'en les exécutant.
+void CortexM3::branchDirect(uint32_t address) {
+  branchTo(address);
+  if (address > pc_) return;
+  const uint32_t status = (static_cast<uint32_t>(n_) << 31) | (static_cast<uint32_t>(z_) << 30) |
+                          (static_cast<uint32_t>(c_) << 29) | (static_cast<uint32_t>(v_) << 28) |
+                          (static_cast<uint32_t>(q_) << 27) | (itstate_ << 16) | (primask_ << 15) |
+                          (faultmask_ << 14) | (static_cast<uint32_t>(usingPsp_) << 13) |
+                          (basepri_ << 4) | (ipsr_ & 0xf) | ((ipsr_ >> 4) << 9 & 0x1e00);
+  if (nextPc_ == snapshot_.pc && !stateChanged_ && status == snapshot_.status &&
+      std::memcmp(r_, snapshot_.r, sizeof(snapshot_.r)) == 0) {
+    const uint64_t length = cycles_ - snapshotCycles_;
+    const uint64_t limit = std::min(nextEvent_, runLimit_);
+    if (length > 0 && limit > cycles_) {
+      const uint64_t turns = (limit - cycles_) / length;
+      instructions_ += turns * (instructions_ - snapshotInstructions_);
+      cycles_ += turns * length;
+      idleCycles_ += turns * length;
+    }
+    idleCycles_ += length;
+  } else {
+    snapshot_.pc = nextPc_;
+    std::memcpy(snapshot_.r, r_, sizeof(snapshot_.r));
+    snapshot_.status = status;
+  }
+  stateChanged_ = false;
+  snapshotCycles_ = cycles_;
+  snapshotInstructions_ = instructions_;
 }
 
 void CortexM3::bxWritePc(uint32_t address) {
@@ -870,12 +927,12 @@ void CortexM3::exec16(uint32_t insn) {
       } else if (cond == 15) {
         pendException(11);  // SVC
       } else if (conditionPassed(cond)) {
-        branchTo(pc_ + 4 + static_cast<uint32_t>(signExtend(insn & 0xff, 8) * 2));
+        branchDirect(pc_ + 4 + static_cast<uint32_t>(signExtend(insn & 0xff, 8) * 2));
       }
       break;
     }
     case 28:
-      branchTo(pc_ + 4 + static_cast<uint32_t>(signExtend(insn & 0x7ff, 11) * 2));
+      branchDirect(pc_ + 4 + static_cast<uint32_t>(signExtend(insn & 0x7ff, 11) * 2));
       break;
     default: undefined(insn); break;
   }
@@ -1107,8 +1164,10 @@ void CortexM3::execBranchMisc(uint32_t insn) {
     const uint32_t target = pc_ + 4 + static_cast<uint32_t>(signExtend(imm, 25));
     if (hw2 & 0x4000) {
       r_[14] = (pc_ + 4) | 1;  // BL
+      branchTo(target);
+    } else {
+      branchDirect(target);
     }
-    branchTo(target);
     return;
   }
   if (hw2 & 0x4000) { undefined(insn); return; }  // BLX : pas sur Cortex-M
@@ -1118,7 +1177,7 @@ void CortexM3::execBranchMisc(uint32_t insn) {
     if (conditionPassed(cond)) {
       const uint32_t imm = (s << 20) | (j2 << 19) | (j1 << 18) | ((hw1 & 0x3f) << 12) |
                            ((hw2 & 0x7ff) << 1);
-      branchTo(pc_ + 4 + static_cast<uint32_t>(signExtend(imm, 21)));
+      branchDirect(pc_ + 4 + static_cast<uint32_t>(signExtend(imm, 21)));
     }
     return;
   }

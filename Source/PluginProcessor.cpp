@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "BinaryData.h"
 #include "PluginEditor.h"
 
 namespace {
@@ -45,7 +46,7 @@ const juce::StringArray kCvSources {
   juce::String::fromUTF8("Automation")
 };
 
-constexpr uint64_t kDisplayValid = uint64_t { 1 } << 40;
+constexpr size_t kSettingsSize = 16 * 1024;   // zone des réglages, en fin de flash
 
 }  // namespace
 
@@ -111,38 +112,39 @@ TressesAudioProcessor::TressesAudioProcessor()
 
   for (auto& m : meters_) m.store(0.0f);
 
-  slot_ = tresses::claimFirmwareSlot();
-  module_ = tresses::firmwareSlot(slot_);
-
   // Chaque module a son propre identifiant de puce (il sert à la signature SIGN).
   auto& random = juce::Random::getSystemRandom();
   for (auto& word : uid_) word = static_cast<uint32_t>(random.nextInt());
 
-  resampler_.prepare(tresses::kModuleSampleRate, 48000.0);
-  powerOn(nullptr, 0, true);  // module neuf, calibré en usine
+  resampler_.prepare(96000.0, 48000.0);
+  powerOn(nullptr, 0);  // module neuf, réglages d'usine
 }
 
-TressesAudioProcessor::~TressesAudioProcessor() {
-  tresses::releaseFirmwareSlot(slot_);
-}
-
-void TressesAudioProcessor::powerOn(const uint8_t* flash, size_t flashSize,
-                                    bool factoryCalibrate) {
-  if (module_ == nullptr) return;
-  uint16_t codes[3];
-  tresses::analog::factoryCalibrationCodes(codes);
+// Mise sous tension. `settings` : contenu de la zone des réglages de la flash
+// (16 derniers Ko) ; sans lui, le module démarre avec ses réglages d'usine.
+void TressesAudioProcessor::powerOn(const uint8_t* settings, size_t settingsSize) {
+  using Machine = tresses::emu::BraidsMachine;
   const juce::SpinLock::ScopedLockType lock(moduleLock_);
-  readPanel();
-  updateJacks();
-  module_->power_on(flash, flashSize, uid_, tresses::analog::frame(panel_, jacks_),
-                    factoryCalibrate, codes);
+  machine_.loadApplication(reinterpret_cast<const uint8_t*>(BinaryData::braids1_9_bin),
+                           static_cast<size_t>(BinaryData::braids1_9_binSize));
+  std::vector<uint8_t> flash(machine_.flashImage(), machine_.flashImage() + Machine::kFlashSize);
+  if (settings == nullptr || settingsSize != kSettingsSize) {
+    settings = reinterpret_cast<const uint8_t*>(BinaryData::braids1_9_factory_bin);
+    settingsSize = static_cast<size_t>(BinaryData::braids1_9_factory_binSize);
+  }
+  std::memcpy(flash.data() + Machine::kFlashSize - kSettingsSize, settings,
+              std::min(settingsSize, kSettingsSize));
+  machine_.restoreFlash(flash.data(), flash.size());
+  machine_.setUniqueId(uid_);
+  machine_.powerOn();
+  loadCycles_ = machine_.cycles();
+  loadIdle_ = machine_.cpu().idleCycles();
   resampler_.reset();
 }
 
 void TressesAudioProcessor::prepareToPlay(double sampleRate, int) {
   const juce::SpinLock::ScopedLockType lock(moduleLock_);
-  const int moduleRate = module_ ? module_->sample_rate() : tresses::kModuleSampleRate;
-  resampler_.prepare(moduleRate, sampleRate);
+  resampler_.prepare(machine_.sampleRate(), sampleRate);
   setLatencySamples(resampler_.latencyInOutputSamples());
 }
 
@@ -229,14 +231,19 @@ void TressesAudioProcessor::pullModuleBlock(float* dst) {
   // la lecture de l'ADC du module (un balayage complet tous les 12 échantillons).
   readPanel();
   updateJacks();
-  tresses::FrameInput frames[tresses::Resampler::kBlock];
+  using Inputs = tresses::emu::BraidsMachine::Inputs;
   const tresses::FrameInput f = tresses::analog::frame(panel_, jacks_);
-  std::fill(std::begin(frames), std::end(frames), f);
+  Inputs in;
+  for (int i = 0; i < 4; ++i) in.adc[i] = f.adc[i];
+  in.fine = f.fine;
+  in.trig = f.trig != 0;
+  Inputs frames[tresses::Resampler::kBlock];
+  std::fill(std::begin(frames), std::end(frames), in);
   if (retrigger_) {
-    frames[0].trig = 0;
+    frames[0].trig = false;
     retrigger_ = false;
   }
-  module_->run(frames, dst, tresses::Resampler::kBlock);
+  machine_.run(frames, dst, tresses::Resampler::kBlock);
 }
 
 void TressesAudioProcessor::renderRange(float* out, int start, int end) {
@@ -250,10 +257,11 @@ void TressesAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
   juce::ScopedNoDenormals noDenormals;
   const int numSamples = buffer.getNumSamples();
   buffer.clear();
-  if (module_ == nullptr || buffer.getNumChannels() == 0 || numSamples == 0) return;
+  if (buffer.getNumChannels() == 0 || numSamples == 0) return;
 
   const juce::SpinLock::ScopedLockType lock(moduleLock_);
-  module_->encoder(encoderSteps_.exchange(0), encoderPressed_.load());
+  machine_.encoderTurn(encoderSteps_.exchange(0));
+  machine_.encoderPress(encoderPressed_.load());
 
   float* out = buffer.getWritePointer(0);
   int position = 0;
@@ -267,14 +275,20 @@ void TressesAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
   if (buffer.getNumChannels() > 1) buffer.copyFrom(1, 0, buffer, 0, 0, numSamples);
 
-  // Afficheur et LED pour l'interface.
-  tresses::DisplayState d;
-  module_->display(&d);
-  uint64_t word = kDisplayValid | (static_cast<uint64_t>(d.brightness) << 32);
-  for (int i = 0; i < 4; ++i) {
-    word |= static_cast<uint64_t>(static_cast<uint8_t>(d.text[i])) << (8 * i);
-  }
+  // Afficheur, charge du processeur et LED pour l'interface.
+  const auto d = machine_.display();
+  uint64_t word = 0;
+  for (int i = 0; i < 4; ++i) word |= static_cast<uint64_t>(d.segments[i]) << (16 * i);
   displayWord_.store(word);
+  displayBrightness_.store(d.brightness);
+  moduleCrashed_.store(machine_.crashed());
+  const uint64_t cycles = machine_.cycles();
+  if (cycles - loadCycles_ > tresses::emu::BraidsMachine::kCpuHz / 4) {
+    const uint64_t idle = machine_.cpu().idleCycles();
+    moduleLoad_.store(1.0f - static_cast<float>(idle - loadIdle_) / static_cast<float>(cycles - loadCycles_));
+    loadCycles_ = cycles;
+    loadIdle_ = idle;
+  }
 
   const float peak = buffer.getMagnitude(0, 0, numSamples);
   outPeak_ = std::max(peak, outPeak_ * 0.8f);
@@ -286,16 +300,11 @@ void TressesAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
   meters_[5].store(outPeak_);
 }
 
-tresses::DisplayState TressesAudioProcessor::display() const {
-  tresses::DisplayState d {};
+tresses::emu::BraidsMachine::Display TressesAudioProcessor::display() const {
+  tresses::emu::BraidsMachine::Display d;
   const uint64_t word = displayWord_.load();
-  if ((word & kDisplayValid) == 0) {
-    for (auto& c : d.text) c = ' ';
-    d.brightness = 3;
-    return d;
-  }
-  for (int i = 0; i < 4; ++i) d.text[i] = static_cast<char>((word >> (8 * i)) & 0xff);
-  d.brightness = static_cast<uint8_t>((word >> 32) & 0xff);
+  for (int i = 0; i < 4; ++i) d.segments[i] = static_cast<uint16_t>(word >> (16 * i));
+  d.brightness = displayBrightness_.load();
   return d;
 }
 
@@ -316,31 +325,28 @@ juce::AudioProcessorEditor* TressesAudioProcessor::createEditor() {
 
 // --- État : paramètres + mémoire du module ---------------------------------------------
 //
-// Comme le vrai module, Tresses garde ses réglages dans sa flash : l'image de la
-// flash est enregistrée dans le projet. Les réglages en RAM le sont aussi, pour
-// retrouver exactement le son entendu même si le menu n'a pas été refermé (sur
-// le module, la sauvegarde se fait en revenant à WAVE).
+// Comme le vrai module, Tresses garde ses réglages dans sa flash : la zone des
+// réglages est enregistrée dans le projet. À la réouverture, le module est remis
+// sous tension avec cette flash, exactement comme un module qu'on rallume : les
+// réglages du menu sont ceux de la dernière sauvegarde (retour sur WAVE).
 
 void TressesAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
+  using Machine = tresses::emu::BraidsMachine;
   auto state = apvts.copyState();
-  if (module_ != nullptr) {
-    juce::MemoryBlock flash(tresses::kFlashImageSize);
-    juce::MemoryBlock settings;
-    {
-      const juce::SpinLock::ScopedLockType lock(moduleLock_);
-      module_->read_flash(static_cast<uint8_t*>(flash.getData()));
-      settings.setSize(module_->settings_size());
-      module_->read_settings(static_cast<uint8_t*>(settings.getData()));
-    }
-    juce::ValueTree moduleTree("MODULE");
-    moduleTree.setProperty("uid", juce::String::toHexString(static_cast<juce::int64>(uid_[0])) + ":" +
-                                      juce::String::toHexString(static_cast<juce::int64>(uid_[1])) + ":" +
-                                      juce::String::toHexString(static_cast<juce::int64>(uid_[2])),
-                           nullptr);
-    moduleTree.setProperty("flash", flash.toBase64Encoding(), nullptr);
-    moduleTree.setProperty("ram", settings.toBase64Encoding(), nullptr);
-    state.appendChild(moduleTree, nullptr);
+  juce::MemoryBlock settings(kSettingsSize);
+  {
+    const juce::SpinLock::ScopedLockType lock(moduleLock_);
+    std::memcpy(settings.getData(), machine_.flashImage() + Machine::kFlashSize - kSettingsSize,
+                kSettingsSize);
   }
+  juce::ValueTree moduleTree("MODULE");
+  moduleTree.setProperty("uid", juce::String::toHexString(static_cast<juce::int64>(uid_[0])) + ":" +
+                                    juce::String::toHexString(static_cast<juce::int64>(uid_[1])) + ":" +
+                                    juce::String::toHexString(static_cast<juce::int64>(uid_[2])),
+                         nullptr);
+  moduleTree.setProperty("firmware", "braids-1.9", nullptr);
+  moduleTree.setProperty("flash", settings.toBase64Encoding(), nullptr);
+  state.appendChild(moduleTree, nullptr);
   if (auto xml = state.createXml()) copyXmlToBinary(*xml, destData);
 }
 
@@ -352,27 +358,15 @@ void TressesAudioProcessor::setStateInformation(const void* data, int sizeInByte
   auto moduleTree = tree.getChildWithName("MODULE");
   if (moduleTree.isValid()) tree.removeChild(moduleTree, nullptr);
   apvts.replaceState(tree);
-
-  if (!moduleTree.isValid() || module_ == nullptr) return;
+  if (!moduleTree.isValid()) return;
 
   const auto uidParts = juce::StringArray::fromTokens(moduleTree["uid"].toString(), ":", "");
   if (uidParts.size() == 3) {
-    for (int i = 0; i < 3; ++i) {
-      uid_[i] = static_cast<uint32_t>(uidParts[i].getHexValue64());
-    }
+    for (int i = 0; i < 3; ++i) uid_[i] = static_cast<uint32_t>(uidParts[i].getHexValue64());
   }
-  juce::MemoryBlock flash, settings;
-  const bool hasFlash = flash.fromBase64Encoding(moduleTree["flash"].toString()) &&
-                        flash.getSize() > 0;
-  settings.fromBase64Encoding(moduleTree["ram"].toString());
-
-  powerOn(hasFlash ? static_cast<const uint8_t*>(flash.getData()) : nullptr,
-          hasFlash ? flash.getSize() : 0, !hasFlash);
-
-  if (settings.getSize() == module_->settings_size()) {
-    const juce::SpinLock::ScopedLockType lock(moduleLock_);
-    module_->write_settings(static_cast<const uint8_t*>(settings.getData()));
-  }
+  juce::MemoryBlock settings;
+  settings.fromBase64Encoding(moduleTree["flash"].toString());
+  powerOn(static_cast<const uint8_t*>(settings.getData()), settings.getSize());
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() {

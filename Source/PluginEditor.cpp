@@ -155,8 +155,9 @@ void Knob::paint(juce::Graphics& g) {
 
 // --- SegmentDisplay ---------------------------------------------------------------------
 
-void SegmentDisplay::setState(const tresses::DisplayState& state) {
-  if (std::memcmp(state.text, state_.text, 4) != 0 || state.brightness != state_.brightness) {
+void SegmentDisplay::setState(const tresses::emu::BraidsMachine::Display& state) {
+  if (std::memcmp(state.segments, state_.segments, sizeof(state.segments)) != 0 ||
+      std::abs(state.brightness - state_.brightness) > 0.02f) {
     state_ = state;
     repaint();
   }
@@ -251,16 +252,14 @@ void SegmentDisplay::paint(juce::Graphics& g) {
   g.setColour(juce::Colour(0xff150807));
   g.fillRoundedRectangle(inner, 3.0f);
 
-  // Luminosité : le driver allume l'afficheur (brightness + 1) cycles sur 4.
-  const float duty = (static_cast<float>(juce::jmin<int>(state_.brightness, 3)) + 1.0f) / 4.0f;
-  const float intensity = 0.3f + 0.7f * duty;
+  // Luminosité : part du temps pendant laquelle le firmware allume l'afficheur.
+  const float intensity = state_.brightness <= 0.0f ? 0.0f : 0.3f + 0.7f * state_.brightness;
   const float cellWidth = inner.getWidth() / 4.0f;
   for (int i = 0; i < 4; ++i) {
     auto cell = juce::Rectangle<float>(inner.getX() + static_cast<float>(i) * cellWidth,
                                        inner.getY(), cellWidth, inner.getHeight())
                     .reduced(cellWidth * 0.14f, inner.getHeight() * 0.1f);
-    const auto c = static_cast<uint8_t>(state_.text[i]);
-    paintDigit(g, cell, font_ ? font_[c] : 0, intensity);
+    paintDigit(g, cell, intensity > 0.0f ? state_.segments[i] : 0, intensity);
   }
 }
 
@@ -473,7 +472,6 @@ TressesAudioProcessorEditor::TressesAudioProcessorEditor(TressesAudioProcessor& 
   auto& state = processor_.apvts;
   auto tip = [](const char* s) { return juce::String::fromUTF8(s); };
 
-  display_.setFont(processor_.font());
   addAndMakeVisible(display_);
   addAndMakeVisible(encoder_);
 
@@ -572,13 +570,15 @@ void TressesAudioProcessorEditor::paint(juce::Graphics& g) {
   g.drawText(juce::String::fromUTF8("module virtuel · " TRESSES_FIRMWARE_LABEL),
              header.translated(0, 24).withHeight(16), juce::Justification::centredLeft);
 
-  if (!processor_.hasModule()) {
-    g.setColour(colours::led);
-    g.setFont(uiFont(13.0f, true));
-    g.drawFittedText(juce::String::fromUTF8("Trop de Tresses ouverts en même temps : "
-                                            "ferme une instance puis recharge celle-ci."),
-                     display_.getBounds().translated(0, display_.getHeight() + 4).withHeight(40),
-                     juce::Justification::centred, 2);
+  // Occupation du processeur du module (STM32F103 à 72 MHz).
+  {
+    const bool crashed = processor_.moduleCrashed();
+    const int load = juce::roundToInt(processor_.moduleLoad() * 100.0f);
+    g.setColour(crashed || load >= 95 ? colours::led : colours::textDim);
+    g.setFont(uiFont(11.0f, crashed));
+    g.drawText(crashed ? juce::String::fromUTF8("firmware planté")
+                       : juce::String::fromUTF8("processeur du module : ") + juce::String(load) + " %",
+               header.translated(0, 24).withHeight(16), juce::Justification::centredRight);
   }
 
   // Interface MIDI -> CV.
@@ -677,6 +677,8 @@ void TressesAudioProcessorEditor::resized() {
 
 void TressesAudioProcessorEditor::timerCallback() {
   display_.setState(processor_.display());
+  const int load = juce::roundToInt(processor_.moduleLoad() * 100.0f);
+  if (load != shownLoad_) { shownLoad_ = load; repaint(moduleArea_.withHeight(60)); }
 
   const auto meters = processor_.jackMeters();
   jackTrig_->setLevel(meters.trig);

@@ -51,6 +51,18 @@ class CortexM3 {
   uint64_t cycles() const { return cycles_; }
   uint64_t instructions() const { return instructions_; }
 
+  // Cycles passés dans une boucle d'attente (le programme tourne en rond sans rien
+  // modifier, en attendant une interruption). L'émulateur les saute d'un bloc :
+  // le résultat est strictement le même, mais le calcul est bien plus rapide.
+  // Le rapport idleCycles / cycles donne aussi le temps libre du processeur.
+  uint64_t idleCycles() const { return idleCycles_; }
+
+  // Demande à run() de rendre la main après l'instruction en cours.
+  void stop() { stopRequested_ = true; irqDirty_ = true; }
+
+  // Le processeur est bloqué pendant `cycles` (écriture en flash, par exemple).
+  void stall(uint64_t cycles) { cycles_ += cycles; }
+
   // Interruptions externes (numéro d'IRQ du STM32, 0..67).
   void setIrqPending(int irq, bool pending);
 
@@ -97,6 +109,7 @@ class CortexM3 {
 
   uint32_t readReg(uint32_t n) const { return n == 15 ? pc_ + 4 : r_[n]; }
   void branchTo(uint32_t address);       // BranchWritePC
+  void branchDirect(uint32_t address);   // B, B<cond> : détecte les boucles d'attente
   void bxWritePc(uint32_t address);      // BXWritePC / LoadWritePC
   void aluWritePc(uint32_t address) { branchTo(address); }
 
@@ -159,6 +172,18 @@ class CortexM3 {
   uint64_t nextEvent_ = ~uint64_t { 0 };
 
   bool exclusive_ = false;
+
+  // Détection des boucles d'attente (voir idleCycles()).
+  struct LoopSnapshot {
+    uint32_t pc = 0xffffffffu;
+    uint32_t r[15] = {};
+    uint32_t status = 0;
+  } snapshot_;
+  bool stateChanged_ = true;     // une écriture a modifié la mémoire ou un périphérique
+  uint64_t snapshotCycles_ = 0, snapshotInstructions_ = 0;
+  uint64_t idleCycles_ = 0;
+  uint64_t runLimit_ = 0;
+  bool stopRequested_ = false;
   bool halted_ = false;
   const char* haltReason_ = "";
   uint32_t faultPc_ = 0;
