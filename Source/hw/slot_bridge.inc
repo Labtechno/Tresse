@@ -9,9 +9,8 @@
 // telle quelle : son contenu est reproduit dans MainLoopIteration(). Si ton
 // firmware modifie main() ou ajoute des variables globales, reporte-le ici.
 //
-// Deux familles de firmware sont reconnues (cmake/TressesFirmwareSlots.cmake) :
-// le firmware officiel Braids (et ses dérivés) et Bees-in-the-Trees 4.x
-// (TRESSES_FIRMWARE_BEES).
+// Ce firmware recompilé sert de référence aux tests de l'émulateur
+// (tools/machine_test.cpp, tools/knob_map.cpp). Le plugin ne l'utilise pas.
 
 namespace tresses_bridge {
 
@@ -50,14 +49,9 @@ void ResetFirmwareRam() {
   trigger_flag = false;
   trigger_delay = 0;
   stmlib::Random::Seed(0x21);  // valeur initiale dans stmlib/utils/random.cc
-#if TRESSES_FIRMWARE_BEES
-  ZeroObject(envelope2);
-  sh_pitch = 0;
-#else
   ZeroObject(quantizer);
   ZeroObject(ws);
   current_scale = 0xff;
-#endif
 }
 
 void ApplyInputs(const ::tresses::FrameInput& f) {
@@ -68,12 +62,10 @@ void ApplyInputs(const ::tresses::FrameInput& f) {
 
 // Corps de la boucle while (1) de main() dans braids.cc.
 inline void MainLoopIteration() {
-#if !TRESSES_FIRMWARE_BEES
   if (current_scale != settings.GetValue(SETTING_QUANTIZER_SCALE)) {
     current_scale = settings.GetValue(SETTING_QUANTIZER_SCALE);
     quantizer.Configure(scales[current_scale]);
   }
-#endif
   while (render_block != playback_block) {
     RenderBlock();
   }
@@ -109,18 +101,11 @@ void PowerOn(const uint8_t* flash, size_t flash_size, const uint32_t uid[3],
   if (factory_calibrate) {
     // Procédure CAL du firmware, comme à la sortie d'usine : 1 V puis 3 V sur
     // V/OCT, rien sur FM.
-#if TRESSES_FIRMWARE_BEES
-    settings.Calibrate(
-        calibration_codes[0],
-        calibration_codes[1],
-        calibration_codes[2]);
-#else
     settings.Calibrate(
         calibration_codes[0],
         calibration_codes[1],
         calibration_codes[2],
         0, 4095, 0, 4095);
-#endif
   }
 }
 

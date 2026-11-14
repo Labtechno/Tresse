@@ -5,9 +5,9 @@ Tresses est un plugin instrument (VST3, AU et application autonome) qui contient
 firmware, instruction par instruction, entourée des composants de la carte (timer
 audio, convertisseurs, afficheur, encodeur, mémoire flash).
 
-> **Branche `emulation` — chantier en cours.** Le plugin démarre sur le firmware
-> Braids v1.9 fourni, et peut charger un fichier de firmware `.bin` ou `.wav`.
-> L'état du chantier est dans [`Source/emu/README.md`](Source/emu/README.md).
+Le plugin démarre sur le firmware officiel Braids v1.9, et peut charger n'importe
+quel fichier de firmware `.bin` ou `.wav` de mise à jour. Le détail de l'émulation
+et de ses vérifications est dans [`Source/emu/README.md`](Source/emu/README.md).
 
 ---
 
@@ -209,8 +209,8 @@ Source/engine/Resampler.h      96 kHz -> fréquence du DAW
 Source/PluginProcessor.*       MIDI -> CV, paramètres, état
 Source/PluginEditor.*          façade et interface MIDI -> CV
 firmware/bin/                  image du firmware et réglages d'usine
-firmware/eurorack/             sources de Braids v1.9 (+ stmlib)
-firmware/bees-in-the-trees/    sources de Bees-in-the-Trees v4.1 (pour la suite)
+firmware/eurorack/             sources de Braids v1.9 (+ stmlib) : référence des tests, base d'un firmware maison
+EFFET SUR POTENTIOMETRE/       effet de TIMBRE et COLOR, modèle par modèle, un fichier par firmware
 tools/firmware_wav.py          .bin -> .wav de mise à jour
 tools/                         bancs de test
 ```

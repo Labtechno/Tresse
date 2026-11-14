@@ -1,32 +1,37 @@
 # firmware/
 
-Sources des firmwares que le module virtuel exécute :
-
-- `eurorack/` : firmware officiel **Braids v1.9** d'Emilie Gillet (licence MIT),
-  copié depuis https://github.com/pichenettes/eurorack.
-- `bees-in-the-trees/` : **Bees-in-the-Trees v4.1** de Tim Churches (licence MIT),
-  copié depuis https://github.com/timchurches/Mutated-Mutables, avec la version de
-  stmlib sur laquelle il s'appuie.
-
-Les versions exactes sont dans les fichiers `SOURCE.txt`. Chaque dossier contient :
-
-- `braids/` : le firmware complet du module, sans les fichiers de circuit imprimé ;
-- `stmlib/` : les parties de stmlib dont il a besoin (`utils/`, `dsp/`, `system/`, `ui/`).
-
-Le plugin compile tous les fichiers `braids/*.cc`, plus `stmlib/utils/random.cc` et
-`stmlib/system/system_clock.cc`. Les drivers (`braids/drivers/`) et
-`stmlib/system/storage.h`/`uid.h` sont remplacés par les versions virtuelles de
-`Source/hw/shim/`, qui ont la même interface.
-
-Pour compiler le firmware du **module** (le fichier .wav à jouer dans Braids), il faut
-le dépôt complet avec ses sous-modules (`stmlib`, `stm_audio_bootloader`) et la chaîne
-de compilation ARM.
-
 ## bin/
 
-Images binaires prêtes à être exécutées par la puce émulée :
+Images binaires exécutées par la puce émulée de Tresses. Elles sont extraites des
+fichiers `.wav` de mise à jour officiels, publiés par leurs auteurs : ce sont les
+mêmes programmes que dans un vrai module mis à jour.
 
-- `braids-1.9.bin` : compilé depuis `eurorack/` (arm-none-eabi-gcc 13) ; intégré au plugin ;
-- `braids-1.9.factory.bin` : sa zone de réglages après la calibration d'usine ;
-- `bees-in-the-trees-4.1.bin` : compilé depuis `bees-in-the-trees/`, à charger depuis
-  le bouton Firmware du plugin.
+- `braids-1.9.bin` : Braids v1.9 (Mutable Instruments), intégré au plugin ;
+- `braids-1.9.factory.bin` : sa zone de réglages après la calibration d'usine
+  (procédure CAL du firmware, 1 V puis 3 V) ;
+- `bees-in-the-trees-4.1.bin` : Bees-in-the-Trees v4.1 (Tim Churches), version
+  « factory encoder », à charger depuis le bouton Firmware du plugin.
+
+Pour extraire l'image d'un autre fichier de mise à jour :
+`tresses_machine_test fichier.wav extract image.bin`
+
+## eurorack/
+
+Sources du firmware officiel **Braids v1.9** d'Emilie Gillet (licence MIT), copiées
+depuis https://github.com/pichenettes/eurorack (version exacte dans `SOURCE.txt`) :
+
+- `braids/` : le firmware complet du module, sans les fichiers de circuit imprimé ;
+- `stmlib/` : les parties de stmlib dont il a besoin.
+
+Elles servent à deux choses :
+
+- **la référence des tests** : le même firmware, recompilé pour l'ordinateur
+  (`cmake/TressesFirmwareSlots.cmake`, drivers virtuels de `Source/hw/shim/`), doit
+  donner exactement le même son que le firmware officiel émulé ;
+- **la base d'un firmware maison** : on part de ce code qui marche, on le modifie,
+  on l'essaie dans Tresses, puis sur le vrai module.
+
+Pour compiler un firmware pour le **module** (le `.bin`, puis le `.wav` à jouer dans
+Braids avec `tools/firmware_wav.py`), il faut la chaîne de compilation ARM
+(`arm-none-eabi-gcc`) et le dépôt complet avec ses sous-modules (`stmlib`,
+`stm_audio_bootloader`).

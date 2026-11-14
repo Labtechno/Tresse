@@ -29,7 +29,7 @@ set(BRAIDS_FIRMWARE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/firmware/eurorack"
     CACHE PATH "Sources du firmware de référence (dossier contenant braids/ et stmlib/)")
 if(TRESSES_BUILD_TOOLS)
   include(cmake/TressesFirmwareSlots.cmake)
-  tresses_add_firmware_slots(tresses_module "${BRAIDS_FIRMWARE_DIR}" 2)
+  tresses_add_firmware_slots(tresses_module "${BRAIDS_FIRMWARE_DIR}" 1)
 endif()
 
 # --- Puce virtuelle : exécute une image binaire de firmware (Source/emu) ------------------
@@ -112,14 +112,8 @@ endif()
 
 # --- Outils de test (sans JUCE) -----------------------------------------------------------
 if(TRESSES_BUILD_TOOLS)
-  add_executable(tresses_module_test tools/module_test.cpp)
-  target_link_libraries(tresses_module_test PRIVATE tresses_module)
   add_executable(tresses_knob_map tools/knob_map.cpp)
   target_link_libraries(tresses_knob_map PRIVATE tresses_module)
   add_executable(tresses_machine_test tools/machine_test.cpp)
   target_link_libraries(tresses_machine_test PRIVATE tresses_module tresses_emu)
-  if(NOT WIN32)
-    find_package(Threads REQUIRED)
-    target_link_libraries(tresses_module_test PRIVATE Threads::Threads)
-  endif()
 endif()

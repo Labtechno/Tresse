@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installe Tresses (et Tresses Bees s'il a été compilé) sur Mac :
+# Installe Tresses sur Mac :
 #   - VST3  -> /Library/Audio/Plug-Ins/VST3        (le dossier que Reason scanne)
 #   - AU    -> ~/Library/Audio/Plug-Ins/Components  (Logic, etc.)
 #   - appli autonome -> ~/Applications

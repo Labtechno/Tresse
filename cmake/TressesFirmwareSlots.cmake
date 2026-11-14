@@ -1,9 +1,10 @@
-# Tresses — compilation du firmware Braids en "slots".
+# Tresses — le firmware Braids recompilé pour l'ordinateur, référence des tests.
 #
-# Chaque fichier .cc du firmware est compilé une fois par slot, à l'intérieur d'un
-# espace de noms propre (tresses_slot0, tresses_slot1...). Chaque slot a ainsi sa
-# propre copie de toutes les variables globales du firmware : c'est ce qui permet
-# d'avoir plusieurs Tresses en même temps dans un projet, comme plusieurs modules.
+# Le plugin, lui, émule la puce (Source/emu). Cette version recompilée sert à
+# vérifier l'émulateur : même firmware, même son attendu, échantillon par
+# échantillon (tools/machine_test.cpp), et à mesurer vite l'effet des potards
+# (tools/knob_map.cpp). Chaque fichier .cc est compilé dans un espace de noms
+# propre (tresses_slot0...), avec sa propre copie des variables globales.
 #
 # Les drivers matériels (braids/drivers/*) et quelques en-têtes de stmlib/system
 # sont remplacés par les versions virtuelles de Source/hw/shim, placées en tête
@@ -16,16 +17,6 @@ function(tresses_add_firmware_slots target firmware_dir num_slots)
   list(APPEND firmware_cc
     "${firmware_dir}/stmlib/utils/random.cc"
     "${firmware_dir}/stmlib/system/system_clock.cc")
-
-  # Famille de firmware : officiel (défaut) ou Bees-in-the-Trees 4.x.
-  file(READ "${firmware_dir}/braids/braids.cc" braids_cc_content)
-  set(firmware_bees 0)
-  if(braids_cc_content MATCHES "envelope2")
-    set(firmware_bees 1)
-    message(STATUS "Tresses : firmware de la famille Bees-in-the-Trees détecté")
-  else()
-    message(STATUS "Tresses : firmware de la famille officielle Braids détecté")
-  endif()
 
   set(slot_dir "${CMAKE_CURRENT_BINARY_DIR}/tresses_slots")
   set(sources)
@@ -40,7 +31,7 @@ function(tresses_add_firmware_slots target firmware_dir num_slots)
       set(body "// Fichier généré par cmake/TressesFirmwareSlots.cmake : ne pas modifier.\n")
       string(APPEND body "#define TRESSES_SLOT_RENAME(name) tresses_slot${slot}_##name\n")
       string(APPEND body "#include \"slot_prefix.h\"\n")
-      string(APPEND body "namespace tresses_slot${slot} {\n#include \"slot_compat.h\"\n#include \"${src}\"\n")
+      string(APPEND body "namespace tresses_slot${slot} {\n#include \"${src}\"\n")
       if(stem STREQUAL "braids")
         string(APPEND body "#include \"slot_bridge.inc\"\n}  // namespace tresses_slot${slot}\n\n")
         string(APPEND body "extern const ::tresses::FirmwareSlotApi tresses_slot${slot}_api;\n")
@@ -83,7 +74,7 @@ function(tresses_add_firmware_slots target firmware_dir num_slots)
     "${tresses_root}/Source/hw")
   target_include_directories(${target} INTERFACE "${tresses_root}/Source/hw")
   # TEST : macro prévue par Mutable pour compiler le firmware sur ordinateur.
-  target_compile_definitions(${target} PRIVATE TEST TRESSES_FIRMWARE_BEES=${firmware_bees})
+  target_compile_definitions(${target} PRIVATE TEST)
   set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
   if(NOT MSVC)
     # Arithmétique entière comme sur le Cortex-M3, pas d'avertissements du firmware.
