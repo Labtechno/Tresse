@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstring>
 
-#include "TressesConfig.h"
 
 namespace ui {
 
@@ -41,6 +40,8 @@ LookAndFeel::LookAndFeel() {
   setColour(juce::PopupMenu::textColourId, colours::text);
   setColour(juce::PopupMenu::highlightedBackgroundColourId, colours::cable.withAlpha(0.35f));
   setColour(juce::PopupMenu::highlightedTextColourId, juce::Colours::white);
+  setColour(juce::TextButton::textColourOffId, colours::text);
+  setColour(juce::TextButton::textColourOnId, colours::text);
   setColour(juce::TooltipWindow::backgroundColourId, juce::Colour(0xff0f1012));
   setColour(juce::TooltipWindow::textColourId, colours::text);
   setColour(juce::TooltipWindow::outlineColourId, colours::moduleEdge);
@@ -111,6 +112,16 @@ void LookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, bool, i
 
 juce::Font LookAndFeel::getComboBoxFont(juce::ComboBox&) { return uiFont(13.0f); }
 juce::Font LookAndFeel::getPopupMenuFont() { return uiFont(14.0f); }
+juce::Font LookAndFeel::getTextButtonFont(juce::TextButton&, int) { return uiFont(12.0f); }
+
+void LookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& button, const juce::Colour&,
+                                       bool highlighted, bool down) {
+  const auto bounds = button.getLocalBounds().toFloat().reduced(0.5f);
+  g.setColour(down ? juce::Colour(0xff2a2e33) : (highlighted ? juce::Colour(0xff202328) : juce::Colour(0xff15171a)));
+  g.fillRoundedRectangle(bounds, 4.0f);
+  g.setColour(highlighted ? colours::textDim : colours::moduleEdge);
+  g.drawRoundedRectangle(bounds, 4.0f, 1.0f);
+}
 
 juce::Label* LookAndFeel::createSliderTextBox(juce::Slider& slider) {
   auto* label = LookAndFeel_V4::createSliderTextBox(slider);
@@ -475,6 +486,11 @@ TressesAudioProcessorEditor::TressesAudioProcessorEditor(TressesAudioProcessor& 
   addAndMakeVisible(display_);
   addAndMakeVisible(encoder_);
 
+  firmwareButton_.setTooltip(tip("Changer de firmware : celui fourni avec Tresses, ou un fichier .bin ou .wav"));
+  firmwareButton_.onClick = [this] { showFirmwareMenu(); };
+  addAndMakeVisible(firmwareButton_);
+  refreshFirmwareButton();
+
   fine_ = std::make_unique<Knob>(state, ids::fine, "FINE", colours::knob,
                                  tip("Accord fin : plus ou moins 1 demi-ton"));
   coarse_ = std::make_unique<Knob>(state, ids::coarse, "COARSE", colours::knob,
@@ -565,10 +581,6 @@ void TressesAudioProcessorEditor::paint(juce::Graphics& g) {
   g.setColour(colours::text);
   g.setFont(uiFont(22.0f, true));
   g.drawText(juce::String(JucePlugin_Name).toUpperCase(), header, juce::Justification::centredLeft);
-  g.setColour(colours::textDim);
-  g.setFont(uiFont(11.0f));
-  g.drawText(juce::String::fromUTF8("module virtuel · " TRESSES_FIRMWARE_LABEL),
-             header.translated(0, 24).withHeight(16), juce::Justification::centredLeft);
 
   // Occupation du processeur du module (STM32F103 à 72 MHz).
   {
@@ -624,8 +636,8 @@ void TressesAudioProcessorEditor::paint(juce::Graphics& g) {
   auto footer = getLocalBounds().removeFromBottom(22).reduced(18, 0);
   g.setColour(colours::textDim.withAlpha(0.7f));
   g.setFont(uiFont(10.5f));
-  g.drawText(juce::String::fromUTF8(TRESSES_FIRMWARE_CREDIT
-                                    " Tresses n'est pas un produit Mutable Instruments."),
+  g.drawText(juce::String::fromUTF8("Module Braids émulé. Braids © Emilie Gillet (licence MIT). "
+                                    "Tresses n'est pas un produit Mutable Instruments."),
              footer, juce::Justification::centredLeft);
 }
 
@@ -637,6 +649,7 @@ void TressesAudioProcessorEditor::resized() {
   const int my = moduleArea_.getY();
 
   // Afficheur et encodeur.
+  firmwareButton_.setBounds(mx + 28, my + 42, 232, 20);
   display_.setBounds(mx + 28, my + 70, 260, 106);
   encoder_.setBounds(mx + 310, my + 76, 96, 96);
 
@@ -677,6 +690,7 @@ void TressesAudioProcessorEditor::resized() {
 
 void TressesAudioProcessorEditor::timerCallback() {
   display_.setState(processor_.display());
+  if (!firmwareButton_.getButtonText().contains(processor_.firmwareName())) refreshFirmwareButton();
   const int load = juce::roundToInt(processor_.moduleLoad() * 100.0f);
   if (load != shownLoad_) { shownLoad_ = load; repaint(moduleArea_.withHeight(60)); }
 
@@ -695,4 +709,48 @@ void TressesAudioProcessorEditor::timerCallback() {
   jackFm_->setPatched(patched(ids::fmSource));
   jackTimbre_->setPatched(patched(ids::timbreSource));
   jackColor_->setPatched(patched(ids::colorSource));
+}
+
+// --- Firmware ----------------------------------------------------------------------------------
+
+void TressesAudioProcessorEditor::refreshFirmwareButton() {
+  firmwareButton_.setButtonText(juce::String::fromUTF8("Firmware : ") + processor_.firmwareName() +
+                                juce::String::fromUTF8("  \xe2\x96\xbe"));
+}
+
+void TressesAudioProcessorEditor::showFirmwareMenu() {
+  juce::PopupMenu menu;
+  menu.addItem(1, juce::String::fromUTF8("Braids v1.9 (fourni avec Tresses)"), true,
+               processor_.firmwareIsBuiltIn());
+  if (!processor_.firmwareIsBuiltIn()) menu.addItem(2, processor_.firmwareName(), true, true);
+  menu.addSeparator();
+  menu.addItem(3, juce::String::fromUTF8("Charger un fichier .bin ou .wav…"));
+  menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(firmwareButton_),
+                     [safe = juce::Component::SafePointer<TressesAudioProcessorEditor>(this)](int choice) {
+                       if (safe == nullptr) return;
+                       if (choice == 1) { safe->processor_.useBuiltInFirmware(); safe->refreshFirmwareButton(); }
+                       if (choice == 3) safe->chooseFirmwareFile();
+                     });
+}
+
+void TressesAudioProcessorEditor::chooseFirmwareFile() {
+  fileChooser_ = std::make_unique<juce::FileChooser>(
+      juce::String::fromUTF8("Choisir un firmware pour Braids (.bin ou .wav de mise à jour)"),
+      juce::File::getSpecialLocation(juce::File::userHomeDirectory), "*.bin;*.wav");
+  fileChooser_->launchAsync(
+      juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+      [safe = juce::Component::SafePointer<TressesAudioProcessorEditor>(this)](const juce::FileChooser& chooser) {
+        if (safe == nullptr) return;
+        const juce::File file = chooser.getResult();
+        if (file == juce::File()) return;
+        const juce::String error = safe->processor_.loadFirmwareFile(file);
+        safe->refreshFirmwareButton();
+        const juce::String note = error.isNotEmpty() ? error : safe->processor_.firmwareNote();
+        if (note.isNotEmpty()) {
+          juce::AlertWindow::showMessageBoxAsync(
+              error.isNotEmpty() ? juce::MessageBoxIconType::WarningIcon : juce::MessageBoxIconType::InfoIcon,
+              error.isNotEmpty() ? juce::String::fromUTF8("Firmware non chargé") : juce::String::fromUTF8("Firmware chargé"),
+              note, "OK", safe.getComponent());
+        }
+      });
 }

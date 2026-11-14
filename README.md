@@ -5,10 +5,9 @@ Tresses est un plugin instrument (VST3, AU et application autonome) qui contient
 firmware, instruction par instruction, entourée des composants de la carte (timer
 audio, convertisseurs, afficheur, encodeur, mémoire flash).
 
-> **Branche `emulation` — chantier en cours.** Le plugin fait tourner le firmware
-> Braids v1.9 intégré. Le chargement de fichiers de firmware (`.bin`, `.wav`) depuis
-> l'interface arrive à l'étape suivante. L'état du chantier est dans
-> [`Source/emu/README.md`](Source/emu/README.md).
+> **Branche `emulation` — chantier en cours.** Le plugin démarre sur le firmware
+> Braids v1.9 fourni, et peut charger un fichier de firmware `.bin` ou `.wav`.
+> L'état du chantier est dans [`Source/emu/README.md`](Source/emu/README.md).
 
 ---
 
@@ -49,6 +48,33 @@ les six potards (FINE, COARSE, FM, TIMBRE, MODULATION, COLOR) et les six jacks.
 
 Comme le module, **Tresses sonne en continu**. Pour des notes détachées, active
 l'enveloppe interne sur le volume (`|\VCA` dans le menu) ou utilise un VCA de Reason.
+
+### Changer de firmware
+
+Le bouton **Firmware** (au-dessus de l'afficheur) ouvre un menu :
+
+- **Braids v1.9 (fourni avec Tresses)** ;
+- **Charger un fichier .bin ou .wav…** : une image d'application `.bin`, ou le
+  fichier `.wav` de mise à jour audio, celui qu'on joue dans un vrai Braids.
+
+Ce qui se passe au chargement :
+
+- Le `.wav` est démodulé et chaque paquet est vérifié (CRC). Un fichier abîmé ou
+  compressé (MP3…) est refusé avec un message.
+- Le module redémarre sur le nouveau firmware, comme après une mise à jour.
+- **Calibration automatique** : la première fois, Tresses exécute la procédure CAL
+  du firmware (1 V puis 3 V) en actionnant son menu, comme en sortie d'usine. Si le
+  firmware n'a pas de menu CAL. reconnaissable, un message le signale.
+- **Une mémoire par firmware** : chaque firmware garde ses propres réglages. En
+  revenant à un firmware déjà utilisé, on retrouve ses réglages.
+- **Le firmware voyage avec le projet** : le fichier chargé est enregistré dans le
+  projet Reason, avec les réglages de chaque firmware utilisé.
+
+Le dossier `firmware/bin/` contient deux images à essayer : `braids-1.9.bin` et
+`bees-in-the-trees-4.1.bin` (Bees-in-the-Trees, compilé depuis ses sources).
+
+Pour fabriquer le `.wav` de mise à jour d'un `.bin` (par exemple pour flasher ton
+propre firmware sur un vrai Braids) : `python3 tools/firmware_wav.py firmware.bin`
 
 ### L'interface MIDI → CV (panneau de droite) et le câblage dans Reason
 
@@ -105,6 +131,7 @@ cmake -B build-tools -DTRESSES_BUILD_PLUGIN=OFF -DTRESSES_BUILD_TOOLS=ON
 cmake --build build-tools
 build-tools/tresses_machine_test firmware/bin/braids-1.9.bin boot      # démarrage, menu, flash, CAL
 build-tools/tresses_machine_test firmware/bin/braids-1.9.bin compare   # audio contre la référence
+build-tools/tresses_machine_test un_firmware.wav load                  # lecture d'un fichier + CAL
 ```
 
 - **Processeur** : 566 instructions comparées à QEMU, la bibliothèque C et les 47
@@ -122,9 +149,12 @@ build-tools/tresses_machine_test firmware/bin/braids-1.9.bin compare   # audio c
 
 ## Limites actuelles
 
-- **Firmware intégré seulement** : `firmware/bin/braids-1.9.bin` est compilé depuis
-  `firmware/eurorack` avec un compilateur ARM récent. Ce n'est pas le fichier publié
-  par Mutable Instruments, qui pourra être chargé à l'étape suivante.
+- **Images compilées ici** : les `.bin` de `firmware/bin/` sont compilés depuis les
+  sources avec un compilateur ARM récent. Ce ne sont pas les fichiers publiés par
+  leurs auteurs. Les fichiers `.wav` officiels n'ont pas encore été essayés.
+- **Seulement des firmwares pour Braids** (image d'application à l'adresse
+  0x08004000). Le bootloader du module n'est pas émulé : Tresses décode lui-même
+  le `.wav`.
 - **Charge du processeur sous-estimée** : les temps d'attente de la mémoire flash du
   STM32 ne sont pas encore comptés.
 - **Calcul** : l'émulation est gourmande (une part notable d'un cœur par instance).
@@ -137,6 +167,8 @@ build-tools/tresses_machine_test firmware/bin/braids-1.9.bin compare   # audio c
 ```
 Source/emu/CortexM3.*          le processeur
 Source/emu/BraidsMachine.*     la puce et la carte du module
+Source/emu/FirmwareFile.*      lecture des .bin et des .wav de mise à jour
+Source/emu/FactorySetup.*      calibration d'usine par le menu du firmware
 Source/hw/AnalogFrontEnd.h     potards + jacks -> codes des convertisseurs
 Source/hw/ (le reste)          référence pour les tests : firmware recompilé pour PC
 Source/engine/Resampler.h      96 kHz -> fréquence du DAW
@@ -145,6 +177,7 @@ Source/PluginEditor.*          façade et interface MIDI -> CV
 firmware/bin/                  image du firmware et réglages d'usine
 firmware/eurorack/             sources de Braids v1.9 (+ stmlib)
 firmware/bees-in-the-trees/    sources de Bees-in-the-Trees v4.1 (pour la suite)
+tools/firmware_wav.py          .bin -> .wav de mise à jour
 tools/                         bancs de test
 ```
 

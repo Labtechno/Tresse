@@ -6,7 +6,7 @@ if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
   set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Architectures macOS" FORCE)
 endif()
 
-project(Tresses VERSION 0.2.0 LANGUAGES C CXX)
+project(Tresses VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,8 +23,6 @@ option(TRESSES_BUILD_TOOLS "Compiler les outils de test hors plugin (tools/)" OF
 #   firmware/bin/braids-1.9.bin          Braids v1.9, compilé depuis firmware/eurorack
 #   firmware/bin/braids-1.9.factory.bin  ses réglages d'usine (calibration CAL faite)
 set(TRESSES_PRODUCT_NAME "Tresses")
-set(TRESSES_FIRMWARE_LABEL "firmware Braids v1.9")
-set(TRESSES_FIRMWARE_CREDIT "Firmware Braids v1.9 © Emilie Gillet, licence MIT.")
 
 # Référence pour les tests : le même firmware recompilé pour l'ordinateur (Source/hw).
 set(BRAIDS_FIRMWARE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/firmware/eurorack"
@@ -35,7 +33,9 @@ if(TRESSES_BUILD_TOOLS)
 endif()
 
 # --- Puce virtuelle : exécute une image binaire de firmware (Source/emu) ------------------
-add_library(tresses_emu STATIC Source/emu/CortexM3.cpp Source/emu/BraidsMachine.cpp)
+add_library(tresses_emu STATIC
+  Source/emu/CortexM3.cpp Source/emu/BraidsMachine.cpp
+  Source/emu/FirmwareFile.cpp Source/emu/FactorySetup.cpp)
 target_include_directories(tresses_emu PUBLIC Source/emu)
 set_target_properties(tresses_emu PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(NOT MSVC)
@@ -85,12 +85,6 @@ if(TRESSES_BUILD_PLUGIN)
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
-  # Textes affichés dans l'interface (nom du firmware, crédits).
-  file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/TressesConfig.h"
-       CONTENT "#pragma once\n#define TRESSES_FIRMWARE_LABEL \"@TRESSES_FIRMWARE_LABEL@\"\n#define TRESSES_FIRMWARE_CREDIT \"@TRESSES_FIRMWARE_CREDIT@\"\n"
-       @ONLY)
-  target_include_directories(Tresses PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-
   juce_add_binary_data(TressesFirmware SOURCES
     firmware/bin/braids-1.9.bin
     firmware/bin/braids-1.9.factory.bin)
@@ -105,6 +99,15 @@ if(TRESSES_BUILD_PLUGIN)
       juce::juce_recommended_config_flags
       juce::juce_recommended_lto_flags
       juce::juce_recommended_warning_flags)
+endif()
+
+# --- Test du processeur du plugin (avec JUCE) ------------------------------------------------
+if(TRESSES_BUILD_TOOLS AND TRESSES_BUILD_PLUGIN)
+  juce_add_console_app(tresses_plugin_test)
+  target_sources(tresses_plugin_test PRIVATE tools/plugin_test.cpp)
+  target_include_directories(tresses_plugin_test PRIVATE Source Source/hw Source/engine)
+  target_compile_definitions(tresses_plugin_test PRIVATE JucePlugin_Name="Tresses" JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+  target_link_libraries(tresses_plugin_test PRIVATE Tresses tresses_emu juce::juce_audio_utils)
 endif()
 
 # --- Outils de test (sans JUCE) -----------------------------------------------------------

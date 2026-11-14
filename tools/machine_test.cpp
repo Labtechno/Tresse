@@ -17,6 +17,8 @@
 #include "AnalogFrontEnd.h"
 #include "FirmwareSlot.h"
 #include "../Source/emu/BraidsMachine.h"
+#include "../Source/emu/FactorySetup.h"
+#include "../Source/emu/FirmwareFile.h"
 
 using namespace tresses;
 
@@ -144,11 +146,23 @@ int main(int argc, char** argv) {
   if (argc < 3) { std::printf("usage: machine_test firmware.bin boot|compare|speed\n"); return 2; }
   std::vector<uint8_t> firmware;
   {
+    std::vector<uint8_t> file;
     FILE* f = std::fopen(argv[1], "rb");
     if (!f) { std::perror(argv[1]); return 2; }
     uint8_t buf[4096]; size_t n;
-    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) firmware.insert(firmware.end(), buf, buf + n);
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) file.insert(file.end(), buf, buf + n);
     std::fclose(f);
+    emu::FirmwareImage image;
+    std::string error;
+    const auto t0 = std::chrono::steady_clock::now();
+    if (!emu::readFirmwareFile(file.data(), file.size(), image, error)) {
+      std::printf("Fichier refuse : %s\n", error.c_str());
+      return 4;
+    }
+    const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    firmware = image.data;
+    std::printf("Fichier %s : %zu octets, %d paquets, identifiant %s, lu en %.2f s\n", image.format.c_str(),
+                firmware.size(), image.packets, emu::firmwareId(firmware).c_str(), s);
   }
   const std::string cmd = argv[2];
   Reference ref;
@@ -317,6 +331,37 @@ int main(int argc, char** argv) {
       }
     }
     std::printf("  %d modeles sur %d identiques a la reference, echantillon par echantillon\n", exact, count);
+  } else if (cmd == "load") {
+    // Comme le plugin : charge le fichier, fait le réglage d'usine, vérifie la justesse.
+    Emulated m(firmware, font);
+    uint16_t codes[3];
+    analog::factoryCalibrationCodes(codes);
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto result = emu::factorySetup(m.machine, toInputs(analog::frame(m.panel, m.jacks)), codes[0], codes[1]);
+    const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("Reglage d'usine en %.2f s : %s ; affichage [%s] ; timer audio %.0f Hz\n", s,
+                result == emu::FactoryResult::kCalibrated ? "calibre" :
+                result == emu::FactoryResult::kNoCalMenu ? "pas de menu CAL." : "le firmware ne demarre pas",
+                m.display().c_str(), m.machine.sampleRate());
+    expect(result == emu::FactoryResult::kCalibrated, "reglage d'usine reussi");
+    m.panel.timbre = 0.0f;
+    std::printf("Hauteurs :");
+    for (int note : { 36, 60, 69, 84 }) {
+      m.jacks.voct = static_cast<float>(note - 36) / 12.0f;
+      m.ms(100);
+      std::vector<float> buf(48000);
+      m.run(48000, buf.data());
+      const double f0 = measureF0(buf, m.machine.sampleRate());
+      std::printf(" %.2f Hz (%+.1f ct)", f0, 1200.0 * std::log2(f0 / (440.0 * std::pow(2.0, (note - 69) / 12.0))));
+    }
+    std::printf("\n");
+    if (argc > 3) {
+      const size_t tail = 0x4000 + ((firmware.size() + 1023) & ~size_t { 1023 });
+      FILE* f = std::fopen(argv[3], "wb");
+      std::fwrite(m.machine.flashImage() + tail, 1, emu::BraidsMachine::kFlashSize - tail, f);
+      std::fclose(f);
+      std::printf("Reglages d'usine ecrits dans %s (%zu octets)\n", argv[3], emu::BraidsMachine::kFlashSize - tail);
+    }
   } else if (cmd == "factory" && argc > 3) {
     // Réglages d'usine : flash des réglages (16 derniers Ko) après la calibration.
     Emulated m(firmware, font);

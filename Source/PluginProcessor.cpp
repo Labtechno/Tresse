@@ -6,6 +6,8 @@
 #include <cmath>
 
 #include "BinaryData.h"
+#include "FactorySetup.h"
+#include "FirmwareFile.h"
 #include "PluginEditor.h"
 
 namespace {
@@ -46,7 +48,6 @@ const juce::StringArray kCvSources {
   juce::String::fromUTF8("Automation")
 };
 
-constexpr size_t kSettingsSize = 16 * 1024;   // zone des réglages, en fin de flash
 
 }  // namespace
 
@@ -117,24 +118,81 @@ TressesAudioProcessor::TressesAudioProcessor()
   for (auto& word : uid_) word = static_cast<uint32_t>(random.nextInt());
 
   resampler_.prepare(96000.0, 48000.0);
-  powerOn(nullptr, 0);  // module neuf, réglages d'usine
+  firmware_ = builtInFirmware();
+  juce::String note;
+  boot(factorySettings(firmware_, note));  // module neuf, réglages d'usine
 }
 
-// Mise sous tension. `settings` : contenu de la zone des réglages de la flash
-// (16 derniers Ko) ; sans lui, le module démarre avec ses réglages d'usine.
-void TressesAudioProcessor::powerOn(const uint8_t* settings, size_t settingsSize) {
+// --- Firmware ------------------------------------------------------------------------------
+
+TressesAudioProcessor::Firmware TressesAudioProcessor::builtInFirmware() {
+  Firmware f;
+  f.name = "Braids v1.9";
+  f.image.assign(reinterpret_cast<const uint8_t*>(BinaryData::braids1_9_bin),
+                 reinterpret_cast<const uint8_t*>(BinaryData::braids1_9_bin) + BinaryData::braids1_9_binSize);
+  f.id = tresses::emu::firmwareId(f.image);
+  f.builtIn = true;
+  return f;
+}
+
+// La zone des réglages : de la fin de l'image (arrondie à une page de 1 Ko) à la
+// fin de la flash. C'est là que le firmware range ses réglages et sa calibration.
+size_t TressesAudioProcessor::settingsOffset(const Firmware& firmware) {
+  return 0x4000 + ((firmware.image.size() + 1023) & ~size_t { 1023 });
+}
+
+// Réglages d'usine d'un firmware. Pour le firmware intégré, ils sont fournis avec le
+// plugin. Pour un fichier chargé, un second module émulé exécute la procédure CAL du
+// firmware (1 V puis 3 V), comme en sortie d'usine.
+std::vector<uint8_t> TressesAudioProcessor::factorySettings(const Firmware& firmware,
+                                                            juce::String& note) const {
+  using Machine = tresses::emu::BraidsMachine;
+  const size_t size = Machine::kFlashSize - settingsOffset(firmware);
+  if (firmware.builtIn && static_cast<size_t>(BinaryData::braids1_9_factory_binSize) == size) {
+    const auto* p = reinterpret_cast<const uint8_t*>(BinaryData::braids1_9_factory_bin);
+    return std::vector<uint8_t>(p, p + size);
+  }
+  auto bench = std::make_unique<Machine>();
+  bench->loadApplication(firmware.image.data(), firmware.image.size());
+  bench->setUniqueId(uid_);
+  bench->powerOn();
+  uint16_t codes[3];
+  tresses::analog::factoryCalibrationCodes(codes);
+  const tresses::FrameInput idle = tresses::analog::frame(tresses::PanelState(), tresses::JackState());
+  Machine::Inputs in;
+  for (int i = 0; i < 4; ++i) in.adc[i] = idle.adc[i];
+  in.fine = idle.fine;
+  switch (tresses::emu::factorySetup(*bench, in, codes[0], codes[1])) {
+    case tresses::emu::FactoryResult::kCalibrated: break;
+    case tresses::emu::FactoryResult::kNoCalMenu:
+      note = juce::String::fromUTF8("Ce firmware n'a pas de menu CAL. reconnu : il démarre sans calibration, "
+                                    "les notes peuvent être fausses.");
+      break;
+    case tresses::emu::FactoryResult::kNotRunning:
+      note = juce::String::fromUTF8("Ce firmware ne démarre pas sur le module émulé (rien à l'afficheur).");
+      break;
+  }
+  const uint8_t* flash = bench->flashImage();
+  return std::vector<uint8_t>(flash + settingsOffset(firmware), flash + Machine::kFlashSize);
+}
+
+std::vector<uint8_t> TressesAudioProcessor::currentSettings() {
   using Machine = tresses::emu::BraidsMachine;
   const juce::SpinLock::ScopedLockType lock(moduleLock_);
-  machine_.loadApplication(reinterpret_cast<const uint8_t*>(BinaryData::braids1_9_bin),
-                           static_cast<size_t>(BinaryData::braids1_9_binSize));
-  std::vector<uint8_t> flash(machine_.flashImage(), machine_.flashImage() + Machine::kFlashSize);
-  if (settings == nullptr || settingsSize != kSettingsSize) {
-    settings = reinterpret_cast<const uint8_t*>(BinaryData::braids1_9_factory_bin);
-    settingsSize = static_cast<size_t>(BinaryData::braids1_9_factory_binSize);
+  const uint8_t* flash = machine_.flashImage();
+  return std::vector<uint8_t>(flash + settingsOffset(firmware_), flash + Machine::kFlashSize);
+}
+
+// Mise sous tension avec le firmware courant et la zone de réglages donnée.
+void TressesAudioProcessor::boot(const std::vector<uint8_t>& settings) {
+  using Machine = tresses::emu::BraidsMachine;
+  const juce::SpinLock::ScopedLockType lock(moduleLock_);
+  std::memset(machine_.cpu().flash(), 0xff, Machine::kFlashSize);
+  machine_.loadApplication(firmware_.image.data(), firmware_.image.size());
+  const size_t offset = settingsOffset(firmware_);
+  if (settings.size() == Machine::kFlashSize - offset) {
+    std::memcpy(machine_.cpu().flash() + offset, settings.data(), settings.size());
   }
-  std::memcpy(flash.data() + Machine::kFlashSize - kSettingsSize, settings,
-              std::min(settingsSize, kSettingsSize));
-  machine_.restoreFlash(flash.data(), flash.size());
   machine_.setUniqueId(uid_);
   machine_.powerOn();
   loadCycles_ = machine_.cycles();
@@ -142,9 +200,54 @@ void TressesAudioProcessor::powerOn(const uint8_t* settings, size_t settingsSize
   resampler_.reset();
 }
 
+// Change de firmware, comme un reflashage : les réglages du firmware quitté sont mis
+// de côté, ceux du nouveau sont retrouvés (ou créés), puis le module redémarre.
+void TressesAudioProcessor::switchFirmware(Firmware firmware) {
+  savedSettings_[firmware_.id] = currentSettings();
+  firmwareNote_ = {};
+  std::vector<uint8_t> settings;
+  const auto saved = savedSettings_.find(firmware.id);
+  if (saved != savedSettings_.end() &&
+      saved->second.size() == tresses::emu::BraidsMachine::kFlashSize - settingsOffset(firmware)) {
+    settings = saved->second;
+  } else {
+    settings = factorySettings(firmware, firmwareNote_);
+  }
+  {
+    const juce::SpinLock::ScopedLockType lock(moduleLock_);
+    firmware_ = std::move(firmware);
+  }
+  boot(settings);
+}
+
+juce::String TressesAudioProcessor::loadFirmwareFile(const juce::File& file) {
+  juce::MemoryBlock bytes;
+  if (!file.loadFileAsData(bytes) || bytes.getSize() == 0) {
+    return juce::String::fromUTF8("Impossible de lire ce fichier.");
+  }
+  tresses::emu::FirmwareImage image;
+  std::string error;
+  if (!tresses::emu::readFirmwareFile(static_cast<const uint8_t*>(bytes.getData()), bytes.getSize(), image, error)) {
+    return juce::String::fromUTF8(error.c_str());
+  }
+  Firmware f;
+  f.name = file.getFileNameWithoutExtension();
+  f.image = std::move(image.data);
+  f.id = tresses::emu::firmwareId(f.image);
+  f.builtIn = false;
+  switchFirmware(std::move(f));
+  return {};
+}
+
+void TressesAudioProcessor::useBuiltInFirmware() {
+  if (!firmware_.builtIn) switchFirmware(builtInFirmware());
+}
+
 void TressesAudioProcessor::prepareToPlay(double sampleRate, int) {
   const juce::SpinLock::ScopedLockType lock(moduleLock_);
-  resampler_.prepare(machine_.sampleRate(), sampleRate);
+  hostSampleRate_ = sampleRate;
+  moduleSampleRate_ = machine_.sampleRate();
+  resampler_.prepare(moduleSampleRate_, hostSampleRate_);
   setLatencySamples(resampler_.latencyInOutputSamples());
 }
 
@@ -246,6 +349,15 @@ void TressesAudioProcessor::pullModuleBlock(float* dst) {
   machine_.run(frames, dst, tresses::Resampler::kBlock);
 }
 
+// Un firmware peut régler son timer audio sur une autre fréquence que 96 kHz.
+void TressesAudioProcessor::followModuleSampleRate() {
+  const double rate = machine_.sampleRate();
+  if (std::abs(rate - moduleSampleRate_) > 0.5 && rate >= 4000.0 && rate <= 400000.0) {
+    moduleSampleRate_ = rate;
+    resampler_.prepare(moduleSampleRate_, hostSampleRate_);
+  }
+}
+
 void TressesAudioProcessor::renderRange(float* out, int start, int end) {
   for (int n = start; n < end; ++n) {
     out[n] = resampler_.process([this](float* dst) { pullModuleBlock(dst); });
@@ -262,6 +374,7 @@ void TressesAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
   const juce::SpinLock::ScopedLockType lock(moduleLock_);
   machine_.encoderTurn(encoderSteps_.exchange(0));
   machine_.encoderPress(encoderPressed_.load());
+  followModuleSampleRate();
 
   float* out = buffer.getWritePointer(0);
   int position = 0;
@@ -331,21 +444,27 @@ juce::AudioProcessorEditor* TressesAudioProcessor::createEditor() {
 // réglages du menu sont ceux de la dernière sauvegarde (retour sur WAVE).
 
 void TressesAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
-  using Machine = tresses::emu::BraidsMachine;
   auto state = apvts.copyState();
-  juce::MemoryBlock settings(kSettingsSize);
-  {
-    const juce::SpinLock::ScopedLockType lock(moduleLock_);
-    std::memcpy(settings.getData(), machine_.flashImage() + Machine::kFlashSize - kSettingsSize,
-                kSettingsSize);
-  }
+  auto base64 = [](const std::vector<uint8_t>& bytes) {
+    return juce::MemoryBlock(bytes.data(), bytes.size()).toBase64Encoding();
+  };
   juce::ValueTree moduleTree("MODULE");
   moduleTree.setProperty("uid", juce::String::toHexString(static_cast<juce::int64>(uid_[0])) + ":" +
                                     juce::String::toHexString(static_cast<juce::int64>(uid_[1])) + ":" +
                                     juce::String::toHexString(static_cast<juce::int64>(uid_[2])),
                          nullptr);
-  moduleTree.setProperty("firmware", "braids-1.9", nullptr);
-  moduleTree.setProperty("flash", settings.toBase64Encoding(), nullptr);
+  moduleTree.setProperty("firmwareName", firmware_.name, nullptr);
+  moduleTree.setProperty("firmwareId", juce::String(firmware_.id), nullptr);
+  // Le firmware chargé depuis un fichier voyage avec le projet.
+  if (!firmware_.builtIn) moduleTree.setProperty("firmwareImage", base64(firmware_.image), nullptr);
+  moduleTree.setProperty("settings", base64(currentSettings()), nullptr);
+  for (const auto& entry : savedSettings_) {
+    if (entry.first == firmware_.id) continue;
+    juce::ValueTree other("OTHER_FIRMWARE_SETTINGS");
+    other.setProperty("firmwareId", juce::String(entry.first), nullptr);
+    other.setProperty("settings", base64(entry.second), nullptr);
+    moduleTree.appendChild(other, nullptr);
+  }
   state.appendChild(moduleTree, nullptr);
   if (auto xml = state.createXml()) copyXmlToBinary(*xml, destData);
 }
@@ -360,13 +479,45 @@ void TressesAudioProcessor::setStateInformation(const void* data, int sizeInByte
   apvts.replaceState(tree);
   if (!moduleTree.isValid()) return;
 
+  auto bytes = [](const juce::var& v) {
+    juce::MemoryBlock block;
+    block.fromBase64Encoding(v.toString());
+    const auto* p = static_cast<const uint8_t*>(block.getData());
+    return std::vector<uint8_t>(p, p + block.getSize());
+  };
   const auto uidParts = juce::StringArray::fromTokens(moduleTree["uid"].toString(), ":", "");
   if (uidParts.size() == 3) {
     for (int i = 0; i < 3; ++i) uid_[i] = static_cast<uint32_t>(uidParts[i].getHexValue64());
   }
-  juce::MemoryBlock settings;
-  settings.fromBase64Encoding(moduleTree["flash"].toString());
-  powerOn(static_cast<const uint8_t*>(settings.getData()), settings.getSize());
+
+  Firmware firmware = builtInFirmware();
+  if (moduleTree.hasProperty("firmwareImage")) {
+    tresses::emu::FirmwareImage image;
+    std::string error;
+    const auto raw = bytes(moduleTree["firmwareImage"]);
+    if (tresses::emu::readFirmwareFile(raw.data(), raw.size(), image, error)) {
+      firmware.name = moduleTree["firmwareName"].toString();
+      firmware.image = std::move(image.data);
+      firmware.id = tresses::emu::firmwareId(firmware.image);
+      firmware.builtIn = false;
+    }
+  }
+  savedSettings_.clear();
+  for (const auto& child : moduleTree) {
+    if (child.hasType("OTHER_FIRMWARE_SETTINGS")) {
+      savedSettings_[child["firmwareId"].toString().toStdString()] = bytes(child["settings"]);
+    }
+  }
+  std::vector<uint8_t> settings = bytes(moduleTree["settings"]);
+  firmwareNote_ = {};
+  if (settings.size() != tresses::emu::BraidsMachine::kFlashSize - settingsOffset(firmware)) {
+    settings = factorySettings(firmware, firmwareNote_);
+  }
+  {
+    const juce::SpinLock::ScopedLockType lock(moduleLock_);
+    firmware_ = std::move(firmware);
+  }
+  boot(settings);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() {

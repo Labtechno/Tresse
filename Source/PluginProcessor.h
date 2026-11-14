@@ -11,6 +11,8 @@
 
 #include <array>
 #include <atomic>
+#include <map>
+#include <string>
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -75,6 +77,15 @@ class TressesAudioProcessor : public juce::AudioProcessor {
   // --- Pour l'interface ----------------------------------------------------------
   juce::AudioProcessorValueTreeState apvts;
 
+  // --- Firmware (à appeler depuis le fil de l'interface) --------------------------
+  // Charge un fichier .bin ou .wav. Renvoie un message d'erreur, ou une chaîne vide.
+  juce::String loadFirmwareFile(const juce::File& file);
+  void useBuiltInFirmware();
+  juce::String firmwareName() const { return firmware_.name; }
+  bool firmwareIsBuiltIn() const { return firmware_.builtIn; }
+  // Remarque sur le dernier chargement (par exemple : calibration impossible).
+  juce::String firmwareNote() const { return firmwareNote_; }
+
   // Encodeur : crans (+ = horaire) et bouton, appliqués au bloc audio suivant.
   void encoderTurn(int steps) { encoderSteps_.fetch_add(steps); }
   void encoderPress(bool pressed) { encoderPressed_.store(pressed); }
@@ -93,12 +104,24 @@ class TressesAudioProcessor : public juce::AudioProcessor {
   JackMeters jackMeters() const;
 
  private:
-  void powerOn(const uint8_t* settings, size_t settingsSize);
+  struct Firmware {
+    juce::String name;
+    std::string id;               // identifiant de l'image, pour retrouver ses réglages
+    std::vector<uint8_t> image;
+    bool builtIn = true;
+  };
+  static Firmware builtInFirmware();
+  static size_t settingsOffset(const Firmware& firmware);
+  void switchFirmware(Firmware firmware);
+  std::vector<uint8_t> factorySettings(const Firmware& firmware, juce::String& note) const;
+  std::vector<uint8_t> currentSettings();
+  void boot(const std::vector<uint8_t>& settings);
   void readPanel();
   void handleMidi(const juce::MidiMessage& message);
   void updateJacks();
   void renderRange(float* out, int start, int end);
   void pullModuleBlock(float* dst);
+  void followModuleSampleRate();
   float sourceVolts(CvSource source, float automationVolts) const;
 
   struct Raw {
@@ -118,8 +141,13 @@ class TressesAudioProcessor : public juce::AudioProcessor {
     std::atomic<float>* bendRange = nullptr;
   } raw_;
 
-  // Module émulé.
+  // Module émulé et son firmware. Chaque firmware garde sa propre zone de réglages
+  // en flash (savedSettings_), retrouvée quand on revient à lui.
   tresses::emu::BraidsMachine machine_;
+  Firmware firmware_;
+  std::map<std::string, std::vector<uint8_t>> savedSettings_;
+  juce::String firmwareNote_;
+  double hostSampleRate_ = 48000.0, moduleSampleRate_ = 96000.0;
   uint32_t uid_[3] = { 0, 0, 0 };
   juce::SpinLock moduleLock_;
 

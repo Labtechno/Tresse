@@ -35,6 +35,9 @@ class LookAndFeel : public juce::LookAndFeel_V4 {
                     int bw, int bh, juce::ComboBox&) override;
   juce::Font getComboBoxFont(juce::ComboBox&) override;
   juce::Font getPopupMenuFont() override;
+  juce::Font getTextButtonFont(juce::TextButton&, int buttonHeight) override;
+  void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour&,
+                            bool highlighted, bool down) override;
   juce::Label* createSliderTextBox(juce::Slider&) override;
 };
 
@@ -138,6 +141,9 @@ class TressesAudioProcessorEditor : public juce::AudioProcessorEditor,
 
  private:
   void timerCallback() override;
+  void showFirmwareMenu();
+  void chooseFirmwareFile();
+  void refreshFirmwareButton();
 
   TressesAudioProcessor& processor_;
   ui::LookAndFeel lookAndFeel_;
@@ -147,6 +153,8 @@ class TressesAudioProcessorEditor : public juce::AudioProcessorEditor,
   int shownLoad_ = -1;
 
   ui::SegmentDisplay display_;
+  juce::TextButton firmwareButton_;
+  std::unique_ptr<juce::FileChooser> fileChooser_;
   ui::Encoder encoder_;
   std::unique_ptr<ui::Knob> fine_, coarse_, fm_, timbre_, modulation_, color_;
   std::unique_ptr<ui::Jack> jackTrig_, jackVoct_, jackFm_, jackTimbre_, jackColor_, jackOut_;

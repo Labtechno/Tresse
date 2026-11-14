@@ -7,7 +7,7 @@ Tresses, en émulant le STM32F103 du module au lieu de recompiler le code source
 |---|---|---|
 | 1 | Processeur Cortex-M3 (`CortexM3.*`) : instructions Thumb/Thumb-2, exceptions, NVIC, SysTick, comptage des cycles | fait |
 | 2 | Périphériques du STM32F103 et carte Braids (`BraidsMachine.*`), firmware complet, plugin branché dessus | fait |
-| 3 | Chargement des fichiers depuis l'interface, flash par firmware | à faire |
+| 3 | Chargement de fichiers `.bin` et `.wav` depuis l'interface, calibration automatique, réglages par firmware, firmware enregistré dans le projet | fait |
 | 4 | Temps d'accès à la flash, jauge de charge, craquements réalistes | à faire |
 | 5 | Autres firmwares, optimisation, compilation sur GitHub | à faire |
 
