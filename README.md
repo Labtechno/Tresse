@@ -85,6 +85,9 @@ Les fichiers `.wav` officiels se chargent aussi directement. Essayés : Braids 1
 Braids 1.9, Braids « FM range fix », Bees-in-the-Trees v4.1 (encodeur d'origine et
 encodeur inversé). Tous démarrent, se calibrent et jouent juste.
 
+L'effet de TIMBRE et COLOR sur chaque modèle est mesuré dans le dossier
+[`EFFET SUR POTENTIOMETRE`](EFFET%20SUR%20POTENTIOMETRE/), un fichier par firmware.
+
 Pour fabriquer le `.wav` de mise à jour d'un `.bin` (par exemple pour flasher ton
 propre firmware sur un vrai Braids) : `python3 tools/firmware_wav.py firmware.bin`
 
