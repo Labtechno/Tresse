@@ -13,26 +13,30 @@ et de ses vérifications est dans [`Source/emu/README.md`](Source/emu/README.md)
 
 ## Installation sur Mac
 
-1. Sur la page du dépôt, rubrique **Releases** (colonne de droite), ouvre
-   **Tresses — installateur Mac** et télécharge **Tresses-Installateur.pkg**.
-2. Double-clique dessus. La première fois, macOS refuse de l'ouvrir, car Tresses
-   n'est pas signé par Apple : clique sur **OK**.
+1. Sur la page du dépôt, rubrique **Releases** (colonne de droite), ouvre la
+   dernière version et télécharge **Tresses.dmg**. Ouvre-le : il contient
+   **Installer Tresses** et **Désinstaller Tresses**.
+2. Double-clique sur **Installer Tresses**. La première fois, macOS refuse de
+   l'ouvrir, car Tresses n'est pas signé par Apple : clique sur **OK**.
 3. Ouvre **Réglages Système > Confidentialité et sécurité**, descends jusqu'au
-   message sur Tresses-Installateur et clique sur **Ouvrir quand même**, puis confirme.
+   message sur Installer Tresses et clique sur **Ouvrir quand même**, puis confirme.
 4. Suis l'installateur : **Continuer**, **Installer**, ton mot de passe de session.
 5. Relance Reason : Tresses est dans le navigateur, rubrique **Plugins**, fabricant
    **Labtechno**.
 
 L'installateur pose le plugin VST3 (dans `/Library/Audio/Plug-Ins/VST3`), l'application
 Tresses (dans Applications, pour jouer sans Reason) et deux firmwares à essayer (dans
-*Utilisateurs > Partagé > Tresses > Firmwares*). Pour mettre à jour, relance
-simplement un installateur plus récent.
+*Utilisateurs > Partagé > Tresses > Firmwares*).
 
-GitHub fabrique un nouvel installateur à chaque modification du projet : la page
-Releases donne toujours la dernière version.
+**Mettre à jour** : lance l'installateur d'une version plus récente. Il retire
+complètement l'ancienne version avant de poser la nouvelle. GitHub fabrique une
+nouvelle version à chaque modification du projet : la page Releases donne toujours
+la dernière.
 
-**Désinstaller** : supprime `Tresses.vst3` dans `/Library/Audio/Plug-Ins/VST3`,
-`Tresses.app` dans Applications et le dossier `/Users/Shared/Tresses`.
+**Désinstaller** : double-clique sur **Désinstaller Tresses** (même premier passage
+par « Ouvrir quand même »). Il retire le plugin, l'application, les deux firmwares
+fournis et les réglages de l'application. Tes projets Reason et les fichiers que tu
+as ajoutés toi-même dans le dossier des firmwares sont gardés.
 
 **Compiler soi-même** (pour les développeurs) : `bash build_mac.sh` dans le Terminal,
 depuis le dossier du projet.

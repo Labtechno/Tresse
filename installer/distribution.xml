@@ -3,7 +3,7 @@
     <title>Tresses @VERSION@</title>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
-    <options customize="allow" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <options customize="allow" require-scripts="true" hostArchitectures="arm64,x86_64"/>
     <domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/>
     <os-version min="11.0"/>
     <choices-outline>

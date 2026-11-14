@@ -1,10 +1,13 @@
 #!/bin/bash
-# Fabrique l'installateur Mac de Tresses (Tresses-Installateur.pkg).
+# Fabrique l'image disque Tresses.dmg : « Installer Tresses.pkg » et
+# « Désinstaller Tresses.pkg ».
 #
-# Usage : bash installer/build_pkg.sh <dossier des artefacts JUCE> [sortie.pkg]
-#   par exemple : bash installer/build_pkg.sh build/Tresses_artefacts/Release
+# Usage : bash installer/build_pkg.sh <dossier des artefacts JUCE> [dossier de sortie]
+#   par exemple : bash installer/build_pkg.sh build/Tresses_artefacts/Release dist
 #
-# L'installateur pose :
+# Dans le dossier de sortie : Tresses.dmg, et les deux .pkg à part.
+#
+# L'installateur retire d'abord l'ancienne version, puis pose :
 #   - le plugin VST3      dans /Library/Audio/Plug-Ins/VST3   (le dossier que Reason lit)
 #   - l'application       dans /Applications                  (Tresses sans Reason)
 #   - les firmwares       dans /Users/Shared/Tresses/Firmwares
@@ -12,7 +15,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ARTEFACTS="${1:?dossier des artefacts JUCE (…/Tresses_artefacts/Release)}"
-OUT="${2:-Tresses-Installateur.pkg}"
+OUTDIR="${2:-dist}"
+mkdir -p "$OUTDIR"
 VERSION="$(sed -n 's/^project(Tresses VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -33,6 +37,15 @@ codesign --force --deep --sign - "$WORK/vst3/Library/Audio/Plug-Ins/VST3/Tresses
 codesign --force --deep --sign - "$WORK/app/Applications/Tresses.app"
 
 mkdir -p "$WORK/pkgs"
+scripts() {  # nom -> dossier de scripts du composant (ou rien)
+  if [ -d "installer/scripts/$1" ]; then
+    mkdir -p "$WORK/scripts-$1"
+    cp installer/scripts/"$1"/* installer/scripts/common/* "$WORK/scripts-$1/"
+    chmod +x "$WORK/scripts-$1"/pre* "$WORK/scripts-$1"/post* 2>/dev/null || true
+    echo --scripts "$WORK/scripts-$1"
+  fi
+}
+
 component() {  # nom, identifiant
   # Les bundles ne doivent pas être « déplaçables » : sinon, s'il existe déjà un
   # Tresses ailleurs sur le disque, l'installateur l'écraserait à sa place.
@@ -47,8 +60,8 @@ for b in bundles:
 with open(path, 'wb') as f:
     plistlib.dump(bundles, f)
 PY
-  pkgbuild --root "$WORK/$1" --component-plist "$WORK/$1.plist" --identifier "$2" \
-           --version "$VERSION" --install-location / "$WORK/pkgs/$1.pkg"
+  pkgbuild --root "$WORK/$1" --component-plist "$WORK/$1.plist" $(scripts "$1") \
+           --identifier "$2" --version "$VERSION" --install-location / "$WORK/pkgs/$1.pkg"
 }
 component vst3      com.labtechno.tresses.vst3
 component app       com.labtechno.tresses.app
@@ -56,5 +69,19 @@ component firmwares com.labtechno.tresses.firmwares
 
 sed "s/@VERSION@/$VERSION/g" installer/distribution.xml > "$WORK/distribution.xml"
 productbuild --distribution "$WORK/distribution.xml" --resources installer/resources \
-             --package-path "$WORK/pkgs" "$OUT"
-echo "Installateur : $OUT (version $VERSION)"
+             --package-path "$WORK/pkgs" "$OUTDIR/Installer Tresses.pkg"
+
+# Désinstallateur : un paquet sans fichiers, qui exécute le script de retrait.
+mkdir -p "$WORK/uninstall-pkgs"
+pkgbuild --nopayload $(scripts uninstall) --identifier com.labtechno.tresses.uninstall \
+         --version "$VERSION" "$WORK/uninstall-pkgs/uninstall.pkg"
+sed "s/@VERSION@/$VERSION/g" installer/distribution-uninstall.xml > "$WORK/distribution-uninstall.xml"
+productbuild --distribution "$WORK/distribution-uninstall.xml" --resources installer/resources-uninstall \
+             --package-path "$WORK/uninstall-pkgs" "$OUTDIR/Désinstaller Tresses.pkg"
+
+# Image disque : les deux côte à côte.
+mkdir -p "$WORK/dmg"
+cp "$OUTDIR/Installer Tresses.pkg" "$OUTDIR/Désinstaller Tresses.pkg" "$WORK/dmg/"
+rm -f "$OUTDIR/Tresses.dmg"
+hdiutil create -volname "Tresses $VERSION" -srcfolder "$WORK/dmg" -fs HFS+ -format UDZO -ov "$OUTDIR/Tresses.dmg" >/dev/null
+echo "Image disque : $OUTDIR/Tresses.dmg (version $VERSION)"

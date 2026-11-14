@@ -1,0 +1,10 @@
+#!/bin/bash
+# Avant d'installer le plugin : retire complètement l'ancienne version, pour qu'aucun
+# vieux fichier ne reste dans le bundle.
+. "$(dirname "$0")/user_home.sh"
+rm -rf "/Library/Audio/Plug-Ins/VST3/Tresses.vst3"
+# Anciennes installations par install_mac.sh (Audio Unit dans le dossier personnel).
+if [ -n "$USER_HOME" ]; then
+  rm -rf "$USER_HOME/Library/Audio/Plug-Ins/Components/Tresses.component"
+fi
+exit 0

@@ -1,0 +1,20 @@
+#!/bin/bash
+# Désinstallation de Tresses. Les projets Reason ne sont pas touchés, ni les
+# fichiers ajoutés à la main dans le dossier des firmwares.
+. "$(dirname "$0")/user_home.sh"
+rm -rf "/Library/Audio/Plug-Ins/VST3/Tresses.vst3"
+rm -rf "/Applications/Tresses.app"
+rm -f "/Users/Shared/Tresses/Firmwares/braids-1.9.bin" \
+      "/Users/Shared/Tresses/Firmwares/bees-in-the-trees-4.1.bin"
+rmdir "/Users/Shared/Tresses/Firmwares" 2>/dev/null || true
+rmdir "/Users/Shared/Tresses" 2>/dev/null || true
+if [ -n "$USER_HOME" ]; then
+  rm -rf "$USER_HOME/Applications/Tresses.app" \
+         "$USER_HOME/Library/Audio/Plug-Ins/Components/Tresses.component" \
+         "$USER_HOME/Library/Application Support/Tresses.settings" \
+         "$USER_HOME/Library/Application Support/Tresses"
+fi
+for id in com.labtechno.tresses.vst3 com.labtechno.tresses.app com.labtechno.tresses.firmwares; do
+  pkgutil --forget "$id" >/dev/null 2>&1 || true
+done
+exit 0

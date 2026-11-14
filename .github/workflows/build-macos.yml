@@ -2,9 +2,9 @@
 # (push) ou à la demande (onglet Actions > Build macOS > Run workflow).
 #
 # Résultat :
-#   - page « Releases » du dépôt : Tresses-Installateur.pkg (dernière version de la
-#     branche emulation) ;
-#   - en bas de la page du « run », rubrique Artifacts : le même installateur.
+#   - page « Releases » du dépôt : Tresses.dmg (installateur + désinstallateur,
+#     dernière version de la branche emulation) ;
+#   - en bas de la page du « run », rubrique Artifacts : la même image disque.
 name: Build macOS
 
 on:
@@ -27,23 +27,37 @@ jobs:
       - name: Build VST3 et application
         run: cmake --build build --config Release --target Tresses_VST3 Tresses_Standalone -j 4
 
-      - name: Installateur
-        run: bash installer/build_pkg.sh build/Tresses_artefacts/Release Tresses-Installateur.pkg
+      - name: Installateur et désinstallateur
+        run: bash installer/build_pkg.sh build/Tresses_artefacts/Release dist
 
-      - name: Essai de l'installateur sur ce Mac
+      - name: Essai sur ce Mac (installation, mise à jour, désinstallation)
         run: |
-          sudo installer -pkg Tresses-Installateur.pkg -target /
+          set -x
+          sudo installer -pkg "dist/Installer Tresses.pkg" -target /
           test -d /Library/Audio/Plug-Ins/VST3/Tresses.vst3
           test -d /Applications/Tresses.app
           ls -l /Users/Shared/Tresses/Firmwares
           codesign --verify --deep --verbose=2 /Library/Audio/Plug-Ins/VST3/Tresses.vst3
           lipo -info /Library/Audio/Plug-Ins/VST3/Tresses.vst3/Contents/MacOS/Tresses
-          pkgutil --pkgs | grep labtechno
+          # Mise à jour : un vieux fichier dans l'ancien plugin doit disparaître.
+          sudo touch /Library/Audio/Plug-Ins/VST3/Tresses.vst3/Contents/vieux-fichier
+          sudo touch /Users/Shared/Tresses/Firmwares/mon-firmware.bin
+          sudo installer -pkg "dist/Installer Tresses.pkg" -target /
+          test ! -e /Library/Audio/Plug-Ins/VST3/Tresses.vst3/Contents/vieux-fichier
+          test -d /Library/Audio/Plug-Ins/VST3/Tresses.vst3
+          # Désinstallation : tout part, sauf le firmware ajouté à la main.
+          sudo installer -pkg "dist/Désinstaller Tresses.pkg" -target /
+          test ! -e /Library/Audio/Plug-Ins/VST3/Tresses.vst3
+          test ! -e /Applications/Tresses.app
+          test ! -e /Users/Shared/Tresses/Firmwares/braids-1.9.bin
+          test -e /Users/Shared/Tresses/Firmwares/mon-firmware.bin
+          if pkgutil --pkgs | grep -qE "com.labtechno.tresses.(vst3|app|firmwares)$"; then exit 1; fi
+          hdiutil imageinfo dist/Tresses.dmg | head -5
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Tresses-Installateur
-          path: Tresses-Installateur.pkg
+          name: Tresses-macOS
+          path: dist/Tresses.dmg
 
       - name: Publication dans « Releases »
         if: github.ref == 'refs/heads/emulation'
@@ -56,14 +70,17 @@ jobs:
 
           ## Installation
 
-          1. Télécharge **Tresses-Installateur.pkg** ci-dessous.
-          2. Double-clique dessus. macOS refuse la première fois, car Tresses n'est pas signé par Apple : clique sur **OK**.
-          3. Ouvre **Réglages Système > Confidentialité et sécurité**, descends jusqu'au message sur Tresses-Installateur et clique sur **Ouvrir quand même**, puis confirme.
+          1. Télécharge **Tresses.dmg** ci-dessous et ouvre-le : il contient **Installer Tresses** et **Désinstaller Tresses**.
+          2. Double-clique sur **Installer Tresses**. macOS refuse la première fois, car Tresses n'est pas signé par Apple : clique sur **OK**.
+          3. Ouvre **Réglages Système > Confidentialité et sécurité**, descends jusqu'au message sur Installer Tresses et clique sur **Ouvrir quand même**, puis confirme.
           4. Suis l'installateur : Continuer, Installer, ton mot de passe de session.
           5. Relance Reason : Tresses est dans **Plugins**, fabricant **Labtechno**.
+
+          **Mise à jour** : lance l'installateur d'une version plus récente, il remplace l'ancienne.
+          **Désinstaller** : double-clique sur **Désinstaller Tresses** (même premier passage par « Ouvrir quand même »). Tes projets Reason ne sont pas touchés.
 
           Les firmwares fournis sont dans *Utilisateurs > Partagé > Tresses > Firmwares*.
           EOF
           gh release delete derniere-version --yes --cleanup-tag 2>/dev/null || true
-          gh release create derniere-version Tresses-Installateur.pkg \
-            --target "$GITHUB_SHA" --title "Tresses $VERSION — installateur Mac" --notes-file notes.md --latest
+          gh release create derniere-version dist/Tresses.dmg \
+            --target "$GITHUB_SHA" --title "Tresses $VERSION — Mac" --notes-file notes.md --latest
