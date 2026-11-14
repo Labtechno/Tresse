@@ -45,6 +45,9 @@ depuis le dossier du projet.
 
 ## Utilisation
 
+![Tresses dans sa version actuelle](docs/interface.png)
+
+
 ### La façade
 
 Elle a les mêmes commandes que le module : l'afficheur à 4 caractères, l'encodeur,

@@ -13,16 +13,25 @@
 namespace ui {
 
 namespace colours {
-const juce::Colour background { 0xff121416 };
-const juce::Colour module { 0xff1f2226 };
-const juce::Colour moduleEdge { 0xff32363c };
-const juce::Colour interface { 0xff191b1e };
-const juce::Colour text { 0xffe9e6e1 };
-const juce::Colour textDim { 0xff8b9197 };
-const juce::Colour knob { 0xffff8a3d };       // potards du module
-const juce::Colour attenuverter { 0xffffc46b };
-const juce::Colour cable { 0xff3fc1c9 };      // interface MIDI -> CV
-const juce::Colour led { 0xffff3b2f };        // afficheur
+// Façade : les couleurs du Braids d'origine (relevées sur une photo du module).
+const juce::Colour panel { 0xffecebe9 };      // aluminium clair
+const juce::Colour panelDark { 0xffe2e1de };
+const juce::Colour topo { 0xffd2d1cd };       // lignes topographiques du fond
+const juce::Colour ink { 0xff1b1b1d };        // sérigraphie
+const juce::Colour inkDim { 0xff5f5e5a };
+const juce::Colour capWhite { 0xfff0f1ed };   // capuchons FINE, COARSE, FM
+const juce::Colour teal { 0xff00989d };       // capuchons TIMBRE, MODULATION
+const juce::Colour tealLabel { 0xff2f7f8c };  // étiquettes TIMBRE (texte blanc lisible)
+const juce::Colour magenta { 0xffa21e4d };    // COLOR
+const juce::Colour slate { 0xff5d6371 };      // case OUT
+// Autour du module.
+const juce::Colour background { 0xff2b2d31 };
+const juce::Colour interface { 0xff30343b };  // panneau MIDI -> CV
+const juce::Colour field { 0xff22252a };
+const juce::Colour moduleEdge { 0xff454a52 };
+const juce::Colour text { 0xfff2f2f0 };
+const juce::Colour textDim { 0xffaeb3bb };
+const juce::Colour led { 0xffff5a3c };        // afficheur
 }  // namespace colours
 
 class LookAndFeel : public juce::LookAndFeel_V4 {
@@ -41,17 +50,22 @@ class LookAndFeel : public juce::LookAndFeel_V4 {
   juce::Label* createSliderTextBox(juce::Slider&) override;
 };
 
-// Potard : nom au-dessus, valeur en dessous.
+// Potard à jupe colorée : nom puis valeur en dessous. `cap` est la couleur du
+// capuchon ; `labelBox` (si non transparente) encadre le nom, comme TIMBRE et COLOR
+// sur la façade ; `onDark` pour le panneau MIDI -> CV.
 class Knob : public juce::Component {
  public:
   Knob(juce::AudioProcessorValueTreeState& state, const char* paramId,
-       const juce::String& name, juce::Colour accent, const juce::String& tooltip);
+       const juce::String& name, juce::Colour cap, const juce::String& tooltip,
+       juce::Colour labelBox = juce::Colours::transparentBlack, bool onDark = false);
   void resized() override;
   void paint(juce::Graphics&) override;
 
  private:
   juce::String name_;
-  juce::Rectangle<int> labelArea_;
+  juce::Colour labelBox_;
+  bool onDark_;
+  juce::Rectangle<int> labelArea_, valueArea_;
   juce::Slider slider_;
   std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment_;
 };
@@ -101,7 +115,8 @@ class Encoder : public juce::Component,
 // Jack : nom, LED d'activité et câble quand quelque chose y est branché.
 class Jack : public juce::Component {
  public:
-  Jack(const juce::String& name, bool output);
+  Jack(const juce::String& name, bool output,
+       juce::Colour labelBox = juce::Colours::transparentBlack);
   void setPatched(bool patched) { if (patched != patched_) { patched_ = patched; repaint(); } }
   void setLevel(float level);
   void paint(juce::Graphics&) override;
@@ -109,6 +124,7 @@ class Jack : public juce::Component {
  private:
   juce::String name_;
   bool output_;
+  juce::Colour labelBox_;
   bool patched_ = false;
   float level_ = 0.0f;
 };
@@ -118,12 +134,14 @@ class SourceSelect : public juce::Component {
  public:
   SourceSelect(juce::AudioProcessorValueTreeState& state, const char* paramId,
                const juce::String& jackName, const juce::StringArray& items,
-               const juce::String& tooltip);
+               const juce::String& tooltip,
+               juce::Colour labelBox = juce::Colours::transparentBlack);
   void resized() override;
   void paint(juce::Graphics&) override;
 
  private:
   juce::String jackName_;
+  juce::Colour labelBox_;
   juce::ComboBox box_;
   std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment_;
 };
@@ -150,6 +168,7 @@ class TressesAudioProcessorEditor : public juce::AudioProcessorEditor,
   juce::TooltipWindow tooltips_ { this, 600 };
 
   juce::Rectangle<int> moduleArea_, interfaceArea_;
+  juce::Path topo_;   // lignes topographiques du fond de la façade
   int shownLoad_ = -1;
 
   ui::SegmentDisplay display_;
