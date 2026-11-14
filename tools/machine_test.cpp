@@ -3,6 +3,7 @@
 //   machine_test <firmware.bin> boot      démarrage, menu, sauvegarde en flash
 //   machine_test <firmware.bin> compare   audio comparé à la version compilée (référence)
 //   machine_test <firmware.bin> speed     vitesse de l'émulation
+//   machine_test <firmware> extract out.bin   image contenue dans un .wav
 //   machine_test <firmware.bin> cpu       charge du processeur du module, et surcharge
 //
 // La référence est le même firmware recompilé pour l'ordinateur (Source/hw).
@@ -363,6 +364,12 @@ int main(int argc, char** argv) {
       std::fclose(f);
       std::printf("Reglages d'usine ecrits dans %s (%zu octets)\n", argv[3], emu::BraidsMachine::kFlashSize - tail);
     }
+  } else if (cmd == "extract" && argc > 3) {
+    // Image d'application contenue dans le fichier (un .wav de mise à jour, par exemple).
+    FILE* f = std::fopen(argv[3], "wb");
+    std::fwrite(firmware.data(), 1, firmware.size(), f);
+    std::fclose(f);
+    std::printf("Image ecrite dans %s (%zu octets)\n", argv[3], firmware.size());
   } else if (cmd == "factory" && argc > 3) {
     // Réglages d'usine : flash des réglages (16 derniers Ko) après la calibration.
     Emulated m(firmware, font);

@@ -9,7 +9,7 @@ Tresses, en émulant le STM32F103 du module au lieu de recompiler le code source
 | 2 | Périphériques du STM32F103 et carte Braids (`BraidsMachine.*`), firmware complet, plugin branché dessus | fait |
 | 3 | Chargement de fichiers `.bin` et `.wav` depuis l'interface, calibration automatique, réglages par firmware, firmware enregistré dans le projet | fait |
 | 4 | Temps d'accès à la flash, jauge de charge, craquements réalistes | fait |
-| 5 | Autres firmwares, optimisation, compilation sur GitHub | à faire |
+| 5 | Autres firmwares, optimisation, compilation sur GitHub | fait |
 
 ## Vérifier le module complet
 
@@ -51,3 +51,12 @@ la puce. Il n'a pas encore été recalé sur un vrai module.
 `tresses_machine_test <firmware> cpu` donne la charge modèle par modèle, vérifie
 qu'aucun ne dépasse 100 %, puis ralentit la flash (`setFlashWaitOverride`) pour
 vérifier le comportement en surcharge.
+
+Temps libre : à chaque branchement arrière, l'émulateur prend une photo de l'état
+(registres, drapeaux) pour la cible du branchement, une photo par cible (8 cibles).
+S'il revient à la même cible avec le même état sans que rien n'ait changé entre-temps
+(aucune écriture qui modifie la mémoire, aucune lecture de périphérique, aucune
+interruption), ce tour était une attente : il est compté comme temps libre et
+sauté jusqu'au prochain événement. Une photo par cible permet de reconnaître les
+boucles d'attente qui contiennent des boucles internes (cas de Bees-in-the-Trees
+officiel, compilé avec un ancien GCC).

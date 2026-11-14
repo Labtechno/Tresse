@@ -101,8 +101,10 @@ int main(int argc, char** argv) {
     idle(q, 0.8);
     expect(q.firmwareName() == p.firmwareName() && !q.firmwareIsBuiltIn(), "projet rouvert : meme firmware, embarque dans le projet");
     expect(shown(q) == otherModel, "projet rouvert : reglages du firmware retrouves");
+    turn(q, -5); idle(q, 0.2);   // retour sur CSAW, où la hauteur se mesure bien
     const double f = playNote(q, 69);
-    expect(std::abs(f - other) < 0.5, "projet rouvert : meme hauteur");
+    std::printf("La avant / apres reouverture : %.2f / %.2f Hz\n", other, f);
+    expect(std::abs(f - other) < 0.5, "projet rouvert : meme hauteur (calibration retrouvee)");
     q.useBuiltInFirmware();
     idle(q, 0.8);
     expect(q.firmwareIsBuiltIn() && shown(q) == model3, "retour au firmware fourni : ses reglages a lui sont retrouves");

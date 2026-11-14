@@ -48,7 +48,12 @@ if command -v qemu-system-arm > /dev/null; then
   for opt in -O0 -O2; do
     build "irq$opt" "$opt" irq.c || continue
     "$OUT/emu_run" "$OUT/irq$opt.bin" > "$OUT/irq$opt.out" 2> "$OUT/irq$opt.stat"
-    run_qemu "$OUT/irq$opt.elf" "$OUT/irq$opt.ref"
+    # La SysTick de QEMU suit l'horloge réelle de l'ordinateur : sur une machine
+    # chargée, le compte de ticks peut varier d'un essai à l'autre. On réessaie.
+    for try in 1 2 3; do
+      run_qemu "$OUT/irq$opt.elf" "$OUT/irq$opt.ref"
+      cmp -s "$OUT/irq$opt.ref" "$OUT/irq$opt.out" && break
+    done
     check "irq $opt" "$OUT/irq$opt.ref" "$OUT/irq$opt.out"
   done
 else

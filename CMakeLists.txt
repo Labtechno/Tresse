@@ -20,7 +20,7 @@ option(TRESSES_BUILD_TOOLS "Compiler les outils de test hors plugin (tools/)" OF
 # --- Firmware ---------------------------------------------------------------------------
 # Le plugin émule la puce du module (Source/emu) et exécute une image binaire de
 # firmware. Celle qui est intégrée au plugin :
-#   firmware/bin/braids-1.9.bin          Braids v1.9, compilé depuis firmware/eurorack
+#   firmware/bin/braids-1.9.bin          Braids v1.9, extrait du .wav officiel de Mutable Instruments
 #   firmware/bin/braids-1.9.factory.bin  ses réglages d'usine (calibration CAL faite)
 set(TRESSES_PRODUCT_NAME "Tresses")
 

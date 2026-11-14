@@ -193,6 +193,7 @@ class CortexM3 {
   bool pipelinedAccess_ = false;    // l'instruction précédente était un chargement/rangement simple
   bool previousAccess_ = false;
   void flashDataRead();
+  void flashFetch(uint32_t first, uint32_t last);
   // Cycle de donnée d'un chargement/rangement simple, absorbé si l'instruction
   // précédente en était un aussi.
   void accessCycle() {
@@ -201,13 +202,20 @@ class CortexM3 {
   }
 
   // Détection des boucles d'attente (voir idleCycles()).
+  // Une photo de l'état à chaque cible de branchement arrière. Une boucle d'attente
+  // peut contenir plusieurs boucles internes (main → DoEvents → ...) : on garde
+  // donc une photo par cible, pour quelques cibles.
   struct LoopSnapshot {
     uint32_t pc = 0xffffffffu;
     uint32_t r[15] = {};
     uint32_t status = 0;
-  } snapshot_;
-  bool stateChanged_ = true;     // une écriture a modifié la mémoire ou un périphérique
-  uint64_t snapshotCycles_ = 0, snapshotInstructions_ = 0;
+    uint64_t changes = 0;          // valeur de changes_ au moment de la photo
+    uint64_t cycles = 0, instructions = 0, idle = 0;
+  };
+  static constexpr int kSnapshots = 8;
+  LoopSnapshot snapshots_[kSnapshots];
+  int nextSnapshot_ = 0;
+  uint64_t changes_ = 1;           // compte les écritures qui modifient la mémoire, lectures de périphériques, interruptions
   uint64_t idleCycles_ = 0;
   uint64_t runLimit_ = 0;
   bool stopRequested_ = false;

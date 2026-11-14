@@ -46,7 +46,7 @@ les six potards (FINE, COARSE, FM, TIMBRE, MODULATION, COLOR) et les six jacks.
   le processeur du module travaille. À 100 %, le firmware n'arrive plus à calculer
   le son à temps : il rejoue de vieux morceaux de son (bégaiement, craquements)
   et l'encodeur ne répond presque plus, comme sur le module. Avec le firmware
-  d'origine, les modèles vont d'environ 50 % à 88 % (le plus lourd : les trois
+  d'origine, les modèles vont d'environ 55 % à 90 % (le plus lourd : les trois
   carrés désaccordés). C'est une estimation : voir Limites.
 
 Comme le module, **Tresses sonne en continu**. Pour des notes détachées, active
@@ -73,8 +73,17 @@ Ce qui se passe au chargement :
 - **Le firmware voyage avec le projet** : le fichier chargé est enregistré dans le
   projet Reason, avec les réglages de chaque firmware utilisé.
 
-Le dossier `firmware/bin/` contient deux images à essayer : `braids-1.9.bin` et
-`bees-in-the-trees-4.1.bin` (Bees-in-the-Trees, compilé depuis ses sources).
+Le dossier `firmware/bin/` contient deux images, extraites des fichiers `.wav`
+officiels publiés par leurs auteurs (ce sont donc les mêmes programmes que dans un
+vrai module mis à jour) :
+
+- `braids-1.9.bin` : Braids v1.9 (Mutable Instruments), le firmware intégré à Tresses ;
+- `bees-in-the-trees-4.1.bin` : Bees-in-the-Trees v4.1 (Tim Churches), version
+  « factory encoder », pour l'encodeur d'origine du Braids.
+
+Les fichiers `.wav` officiels se chargent aussi directement. Essayés : Braids 1.8,
+Braids 1.9, Braids « FM range fix », Bees-in-the-Trees v4.1 (encodeur d'origine et
+encodeur inversé). Tous démarrent, se calibrent et jouent juste.
 
 Pour fabriquer le `.wav` de mise à jour d'un `.bin` (par exemple pour flasher ton
 propre firmware sur un vrai Braids) : `python3 tools/firmware_wav.py firmware.bin`
@@ -150,7 +159,7 @@ build-tools/tresses_machine_test un_firmware.wav cpu                   # charge 
   recompilée pour PC se trompe ; l'émulateur donne le résultat d'un vrai ARM.
 
 - **Charge du processeur** : avec le firmware d'origine, aucun des 47 modèles ne
-  dépasse 100 % (de 51 % à 88 % selon le modèle, la hauteur et les réglages), ce qui
+  dépasse 100 % (de 55 % à 90 % selon le modèle, la hauteur et les réglages), ce qui
   correspond au module, qui les joue tous sans décrocher. En ralentissant
   artificiellement la mémoire du processeur, la jauge monte à 100 % et le son
   bégaie exactement comme le prévoit le code du firmware (4 blocs de 24
@@ -160,9 +169,6 @@ build-tools/tresses_machine_test un_firmware.wav cpu                   # charge 
 
 ## Limites actuelles
 
-- **Images compilées ici** : les `.bin` de `firmware/bin/` sont compilés depuis les
-  sources avec un compilateur ARM récent. Ce ne sont pas les fichiers publiés par
-  leurs auteurs. Les fichiers `.wav` officiels n'ont pas encore été essayés.
 - **Seulement des firmwares pour Braids** (image d'application à l'adresse
   0x08004000). Le bootloader du module n'est pas émulé : Tresses décode lui-même
   le `.wav`.
@@ -172,10 +178,17 @@ build-tools/tresses_machine_test un_firmware.wav cpu                   # charge 
   ne sont pas publiés. La jauge n'a pas encore été comparée à un vrai Braids : il
   faut compter quelques points d'écart. Un firmware qui affiche 70 % passera sur le
   module ; un firmware à 97 % est à vérifier sur le vrai module.
-- **Bees-in-the-Trees compilé ici** : ses sources sont réglées pour un encodeur qui
-  tourne à l'envers ; dans Tresses l'encodeur est donc inversé avec ce fichier-là.
-- **Calcul** : l'émulation est gourmande (une part notable d'un cœur par instance).
-  L'optimisation est prévue.
+- **Bees-in-the-Trees « reversed encoder »** : cette version est faite pour des
+  encodeurs de remplacement qui tournent à l'envers. Dans Tresses (comme sur un
+  Braids d'origine), l'encodeur tourne alors dans le mauvais sens : prends la
+  version « factory encoder ».
+- **Jauge et boucle d'attente** : la jauge compte comme « libre » le temps que le
+  firmware passe à tourner en rond en attendant le prochain bloc de son. Si un
+  firmware maison attend d'une façon inhabituelle (en modifiant la mémoire à
+  chaque tour, par exemple), la jauge le croira occupé et affichera trop haut.
+- **Calcul** : l'émulation reste gourmande, car chaque instruction du module est
+  rejouée. Compter environ un tiers d'un cœur de serveur de test par instance,
+  nettement moins sur un Mac récent.
 - **Réouverture d'un projet** : le module redémarre (animation comprise) et les
   réglages de menu non sauvés sur WAVE sont perdus, comme sur le module.
 

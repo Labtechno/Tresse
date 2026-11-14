@@ -165,7 +165,7 @@ void CortexM3::write32(uint32_t a, uint32_t v) {
   if (o <= ramSize_ - 4) {
     uint32_t old;
     std::memcpy(&old, &ram_[o], 4);
-    if (old != v) { std::memcpy(&ram_[o], &v, 4); stateChanged_ = true; }
+    if (old != v) { std::memcpy(&ram_[o], &v, 4); ++changes_; }
     return;
   }
   slowWrite(a, v, 4);
@@ -177,7 +177,7 @@ void CortexM3::write16(uint32_t a, uint32_t v) {
     const uint16_t h = static_cast<uint16_t>(v);
     uint16_t old;
     std::memcpy(&old, &ram_[o], 2);
-    if (old != h) { std::memcpy(&ram_[o], &h, 2); stateChanged_ = true; }
+    if (old != h) { std::memcpy(&ram_[o], &h, 2); ++changes_; }
     return;
   }
   slowWrite(a, v & 0xffff, 2);
@@ -186,7 +186,7 @@ void CortexM3::write16(uint32_t a, uint32_t v) {
 void CortexM3::write8(uint32_t a, uint32_t v) {
   const uint32_t o = a - kRamBase;
   if (o < ramSize_) {
-    if (ram_[o] != static_cast<uint8_t>(v)) { ram_[o] = static_cast<uint8_t>(v); stateChanged_ = true; }
+    if (ram_[o] != static_cast<uint8_t>(v)) { ram_[o] = static_cast<uint8_t>(v); ++changes_; }
     return;
   }
   slowWrite(a, v & 0xff, 1);
@@ -199,7 +199,7 @@ uint32_t CortexM3::slowRead(uint32_t a, int size) {
     std::memcpy(&v, &flash_[a], static_cast<size_t>(size));
     return v;
   }
-  stateChanged_ = true;  // lecture d'un périphérique : peut dépendre du temps
+  ++changes_;  // lecture d'un périphérique : peut dépendre du temps
   if ((a & 0xfffff000u) == 0xe000e000u) {
     const uint32_t word = scsRead(a & ~3u);
     const uint32_t shifted = word >> (8 * (a & 3));
@@ -216,7 +216,7 @@ uint32_t CortexM3::slowRead(uint32_t a, int size) {
 }
 
 void CortexM3::slowWrite(uint32_t a, uint32_t v, int size) {
-  stateChanged_ = true;
+  ++changes_;
   if ((a & 0xfffff000u) == 0xe000e000u) {
     if (size == 4) { scsWrite(a, v); return; }
     // Registres de priorité : accès par octet.
@@ -418,6 +418,7 @@ void CortexM3::setExternalDeadline(uint64_t cycle) {
 
 void CortexM3::updateNextEvent() {
   nextEvent_ = std::min(systickNextFire_, externalDeadline_);
+  irqDirty_ = true;   // la boucle de run() recalcule sa limite
 }
 
 void CortexM3::serviceDeadlines() {
@@ -501,7 +502,7 @@ uint32_t CortexM3::xpsr() const {
 }
 
 void CortexM3::exceptionEntry(int number, uint32_t returnAddress) {
-  stateChanged_ = true;
+  ++changes_;
   uint32_t sp = r_[13];
   uint32_t align = 0;
   if ((ccr_ & 0x200) && (sp & 4)) { sp -= 4; align = 1; }
@@ -563,6 +564,7 @@ void CortexM3::exceptionReturn(uint32_t excReturn) {
 
 void CortexM3::halt(const char* reason) {
   halted_ = true;
+  irqDirty_ = true;
   haltReason_ = reason;
 }
 
@@ -593,7 +595,8 @@ void CortexM3::reset() {
   systickRefCycle_ = cycles_;
   systickNextFire_ = ~uint64_t { 0 };
   exclusive_ = false; halted_ = false; haltReason_ = ""; faultPc_ = 0;
-  snapshot_ = LoopSnapshot(); stateChanged_ = true;
+  for (auto& snap : snapshots_) snap = LoopSnapshot();
+  ++changes_;
   updateNextEvent();
   r_[13] = slowRead(0, 4) & ~3u;
   pc_ = slowRead(4, 4) & ~1u;
@@ -603,7 +606,7 @@ void CortexM3::reset() {
 
 // --- Exécution --------------------------------------------------------------------------
 
-void CortexM3::run(uint64_t untilCycle) {
+__attribute__((flatten)) void CortexM3::run(uint64_t untilCycle) {
   stopRequested_ = false;
   runLimit_ = untilCycle;
   while (cycles_ < untilCycle && !halted_) {
@@ -615,8 +618,10 @@ void CortexM3::run(uint64_t untilCycle) {
       cycles_ = std::max(cycles_, std::min(untilCycle, nextEvent_));
       continue;
     }
-    // nextEvent_ peut changer pendant l'exécution (écriture dans un timer).
-    while (cycles_ < untilCycle && cycles_ < nextEvent_ && !irqDirty_ && !sleeping_ && !halted_) step();
+    // Tout ce qui doit interrompre cette boucle (interruption, WFI, arrêt, nouvelle
+    // échéance d'un timer) lève irqDirty_.
+    const uint64_t limit = std::min(untilCycle, nextEvent_);
+    while (cycles_ < limit && !irqDirty_) step();
   }
 }
 
@@ -666,25 +671,35 @@ void CortexM3::branchDirect(uint32_t address) {
                           (static_cast<uint32_t>(q_) << 27) | (itstate_ << 16) | (primask_ << 15) |
                           (faultmask_ << 14) | (static_cast<uint32_t>(usingPsp_) << 13) |
                           (basepri_ << 4) | (ipsr_ & 0xf) | ((ipsr_ >> 4) << 9 & 0x1e00);
-  if (nextPc_ == snapshot_.pc && !stateChanged_ && status == snapshot_.status &&
-      std::memcmp(r_, snapshot_.r, sizeof(snapshot_.r)) == 0) {
-    const uint64_t length = cycles_ - snapshotCycles_;
+  LoopSnapshot* snap = nullptr;
+  for (auto& s : snapshots_) if (s.pc == nextPc_) { snap = &s; break; }
+  if (snap && snap->changes == changes_ && snap->status == status &&
+      std::memcmp(r_, snap->r, sizeof(snap->r)) == 0) {
+    // Même endroit, même état, rien n'a changé depuis la photo : tout ce qui s'est
+    // passé depuis est une attente, et la suite se répétera à l'identique jusqu'au
+    // prochain événement (interruption, périphérique).
+    const uint64_t length = cycles_ - snap->cycles;
+    idleCycles_ = snap->idle + length;
     const uint64_t limit = std::min(nextEvent_, runLimit_);
     if (length > 0 && limit > cycles_) {
       const uint64_t turns = (limit - cycles_) / length;
-      instructions_ += turns * (instructions_ - snapshotInstructions_);
+      instructions_ += turns * (instructions_ - snap->instructions);
       cycles_ += turns * length;
       idleCycles_ += turns * length;
     }
-    idleCycles_ += length;
   } else {
-    snapshot_.pc = nextPc_;
-    std::memcpy(snapshot_.r, r_, sizeof(snapshot_.r));
-    snapshot_.status = status;
+    if (!snap) {
+      snap = &snapshots_[nextSnapshot_];
+      nextSnapshot_ = (nextSnapshot_ + 1) % kSnapshots;
+      snap->pc = nextPc_;
+    }
+    std::memcpy(snap->r, r_, sizeof(snap->r));
+    snap->status = status;
+    snap->changes = changes_;
   }
-  stateChanged_ = false;
-  snapshotCycles_ = cycles_;
-  snapshotInstructions_ = instructions_;
+  snap->cycles = cycles_;
+  snap->instructions = instructions_;
+  snap->idle = idleCycles_;
 }
 
 void CortexM3::bxWritePc(uint32_t address) {
@@ -696,7 +711,40 @@ void CortexM3::bxWritePc(uint32_t address) {
   branchTo(address);
 }
 
-void CortexM3::step() {
+// Attente de la flash, cas général : branchement, ou passage au bloc suivant.
+void CortexM3::flashFetch(uint32_t first, uint32_t last) {
+  const uint64_t access = 1 + flashWait_;
+  if (prefetchFlush_) {
+    // Après un branchement : le mot visé part en lecture à la fin du branchement.
+    prefetchFlush_ = false;
+    prefetchWord_ = first;
+    prefetchReady_ = cycles_ + flashWait_;
+    currentWord_ = first;
+    enteredCurrent_ = enteredPrevious_ = cycles_;
+  } else if (first != currentWord_) {
+    enteredPrevious_ = enteredCurrent_;
+    enteredCurrent_ = cycles_;
+    currentWord_ = first;
+  }
+  while (prefetchWord_ < last) {
+    ++prefetchWord_;
+    uint64_t start = prefetchReady_;
+    if (flashPrefetch_) {
+      // Deux mots d'avance au plus : le mot w n'est lu qu'une fois le
+      // processeur arrivé au mot w - 2.
+      const uint32_t gate = prefetchWord_ - 2;
+      const uint64_t entered = gate == currentWord_ ? enteredCurrent_
+                             : (gate + 1 == currentWord_ ? enteredPrevious_ : 0);
+      start = std::max(start, entered);
+    } else {
+      start = std::max(start, cycles_);   // sans lecture anticipée : à la demande
+    }
+    prefetchReady_ = start + access;
+  }
+  if (prefetchWord_ == last && prefetchReady_ > cycles_) cycles_ = prefetchReady_;
+}
+
+__attribute__((flatten)) void CortexM3::step() {
   uint32_t hw1, hw2 = 0;
   const uint32_t o = pc_ - kFlashBase;
   const bool inFlash = o <= flashSize_ - 4;
@@ -716,35 +764,12 @@ void CortexM3::step() {
   if (flashWait_ && inFlash) {
     const uint32_t first = pc_ >> 3;
     const uint32_t last = (pc_ + size - 1) >> 3;
-    const uint64_t access = 1 + flashWait_;
-    if (prefetchFlush_) {
-      // Après un branchement : le mot visé part en lecture à la fin du branchement.
-      prefetchFlush_ = false;
-      prefetchWord_ = first;
-      prefetchReady_ = cycles_ + flashWait_;
-      currentWord_ = first;
-      enteredCurrent_ = enteredPrevious_ = cycles_;
-    } else if (first != currentWord_) {
-      enteredPrevious_ = enteredCurrent_;
-      enteredCurrent_ = cycles_;
-      currentWord_ = first;
+    if (!prefetchFlush_ && first == currentWord_ && last <= prefetchWord_) {
+      // Cas courant : on avance dans le même bloc de 8 octets, déjà demandé.
+      if (last == prefetchWord_ && prefetchReady_ > cycles_) cycles_ = prefetchReady_;
+    } else {
+      flashFetch(first, last);
     }
-    while (prefetchWord_ < last) {
-      ++prefetchWord_;
-      uint64_t start = prefetchReady_;
-      if (flashPrefetch_) {
-        // Deux mots d'avance au plus : le mot w n'est lu qu'une fois le
-        // processeur arrivé au mot w - 2.
-        const uint32_t gate = prefetchWord_ - 2;
-        const uint64_t entered = gate == currentWord_ ? enteredCurrent_
-                               : (gate + 1 == currentWord_ ? enteredPrevious_ : 0);
-        start = std::max(start, entered);
-      } else {
-        start = std::max(start, cycles_);   // sans lecture anticipée : à la demande
-      }
-      prefetchReady_ = start + access;
-    }
-    if (prefetchWord_ == last && prefetchReady_ > cycles_) cycles_ = prefetchReady_;
   }
 
   ++cycles_;
