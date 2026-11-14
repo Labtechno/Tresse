@@ -80,6 +80,11 @@ class BraidsMachine : public Bus {
   const char* crashReason() const { return cpu_.haltReason(); }
   CortexM3& cpu() { return cpu_; }
 
+  // Pour les essais : impose un nombre de cycles d'attente de la flash, quel que
+  // soit le réglage du firmware (-1 = suivre le firmware). Sert à simuler un
+  // processeur trop lent et à observer le comportement en surcharge.
+  void setFlashWaitOverride(int waitStates) { flashWaitOverride_ = waitStates; }
+
   // --- Bus ---------------------------------------------------------------------
   uint32_t read(uint32_t address, int size) override;
   void write(uint32_t address, uint32_t value, int size) override;
@@ -131,6 +136,7 @@ class BraidsMachine : public Bus {
   uint32_t flashCr_ = 0x80, flashAr_ = 0;
   uint32_t flashWrites_ = 0;
   uint32_t bootSamples_ = 0;
+  int flashWaitOverride_ = -1;
 
   // Afficheur
   uint16_t shiftRegister_ = 0;

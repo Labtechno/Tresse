@@ -70,6 +70,7 @@ void BraidsMachine::powerOn() {
   litCycles_ = 0; brightness_ = 0.0f;
   encoderPending_ = 0; encoderPhase_ = 0; encoderA_ = encoderB_ = true;
   bootSamples_ = 0;
+  cpu_.setFlashTiming(0, true);   // à la mise sous tension : pas de cycle d'attente
   cpu_.reset();
   litWindowStart_ = litSince_ = cpu_.cycles();
   encoderNextPhase_ = cpu_.cycles();
@@ -356,6 +357,11 @@ void BraidsMachine::writeRegister(uint32_t a, uint32_t v) {
     case kDma1 + 0x08: dmaCcr_ = v; break;
     case kDma1 + 0x14: dmaCmar_ = v; break;
 
+    case kFlashReg + 0x00:
+      // FLASH_ACR : cycles d'attente (bits 2..0) et lecture anticipée (bit 4).
+      otherRegisters_[a] = v;
+      cpu_.setFlashTiming(flashWaitOverride_ >= 0 ? static_cast<uint32_t>(flashWaitOverride_) : (v & 7), v & 0x10);
+      break;
     case kFlashReg + 0x04: if (v == 0xcdef89abu) flashCr_ &= ~0x80u; break;
     case kFlashReg + 0x0c: break;
     case kFlashReg + 0x10:

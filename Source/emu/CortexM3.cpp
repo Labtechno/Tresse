@@ -10,7 +10,20 @@
 //   MUL ............................ 1        MLA / MLS ................... 2
 //   multiplication 64 bits ......... 4 à 5    division .................... 2 à 12
 //   entrée / sortie d'interruption . 12
-// Les temps d'attente de la mémoire flash ne sont pas encore modélisés.
+// Des chargements/rangements simples qui se suivent ne coûtent qu'un cycle chacun
+// après le premier (leurs phases d'adresse et de donnée se chevauchent).
+//
+// Mémoire flash (STM32F103, RM0008 / PM0075) : la flash est lue par blocs de
+// 64 bits (tampon de lecture anticipée de 2 x 64 bits). Chaque lecture prend
+// 1 + N cycles, N étant le nombre de cycles d'attente programmé par le firmware
+// (2 à 72 MHz). Un tampon de lecture anticipée lit les mots suivants pendant que
+// le processeur exécute, avec deux blocs d'avance au plus. Conséquences :
+//   - code en ligne droite : le processeur est freiné quand il consomme les mots
+//     plus vite que la flash ne les fournit (un bloc de 8 octets tous les 3 cycles) ;
+//   - branchement pris : le tampon est vidé, N cycles de plus ;
+//   - lecture d'une donnée en flash (tables, constantes) : N cycles de plus, et la
+//     lecture anticipée en cours est retardée d'autant.
+// C'est un modèle : les détails internes de la puce ne sont pas publiés.
 
 #include "CortexM3.h"
 
@@ -118,7 +131,7 @@ uint32_t CortexM3::read32(uint32_t a) {
   uint32_t o = a - kRamBase;
   if (o <= ramSize_ - 4) { uint32_t v; std::memcpy(&v, &ram_[o], 4); return v; }
   o = a - kFlashBase;
-  if (o <= flashSize_ - 4) { uint32_t v; std::memcpy(&v, &flash_[o], 4); return v; }
+  if (o <= flashSize_ - 4) { if (flashWait_) flashDataRead(); uint32_t v; std::memcpy(&v, &flash_[o], 4); return v; }
   return slowRead(a, 4);
 }
 
@@ -126,7 +139,7 @@ uint32_t CortexM3::read16(uint32_t a) {
   uint32_t o = a - kRamBase;
   if (o <= ramSize_ - 2) { uint16_t v; std::memcpy(&v, &ram_[o], 2); return v; }
   o = a - kFlashBase;
-  if (o <= flashSize_ - 2) { uint16_t v; std::memcpy(&v, &flash_[o], 2); return v; }
+  if (o <= flashSize_ - 2) { if (flashWait_) flashDataRead(); uint16_t v; std::memcpy(&v, &flash_[o], 2); return v; }
   return slowRead(a, 2);
 }
 
@@ -134,8 +147,15 @@ uint32_t CortexM3::read8(uint32_t a) {
   uint32_t o = a - kRamBase;
   if (o < ramSize_) return ram_[o];
   o = a - kFlashBase;
-  if (o < flashSize_) return flash_[o];
+  if (o < flashSize_) { if (flashWait_) flashDataRead(); return flash_[o]; }
   return slowRead(a, 1);
+}
+
+// Lecture d'une donnée en flash : elle passe avant la lecture anticipée du code.
+void CortexM3::flashDataRead() {
+  const uint64_t before = cycles_;
+  cycles_ += flashWait_;
+  if (prefetchReady_ > before) prefetchReady_ += 1 + flashWait_;
 }
 
 // Les écritures en RAM notent si la valeur a réellement changé : une boucle
@@ -503,8 +523,12 @@ void CortexM3::exceptionEntry(int number, uint32_t returnAddress) {
   active_[number] = true;
   pending_[number] = false;
   updateExecutionPriority();
-  nextPc_ = read32(vtor_ + 4 * static_cast<uint32_t>(number)) & ~1u;
-  cycles_ += 12;
+  {
+    const uint64_t keep = cycles_;   // la lecture du vecteur est comprise dans les 12 cycles
+    nextPc_ = read32(vtor_ + 4 * static_cast<uint32_t>(number)) & ~1u;
+    cycles_ = keep + 12;
+  }
+  prefetchFlush_ = true;
   irqDirty_ = true;
 }
 
@@ -533,7 +557,8 @@ void CortexM3::exceptionReturn(uint32_t excReturn) {
   ipsr_ = toThread ? 0 : (psr & 0x1ff);
   updateExecutionPriority();
   irqDirty_ = true;
-  cycles_ += 10;
+  cycles_ += 12;
+  prefetchFlush_ = true;
 }
 
 void CortexM3::halt(const char* reason) {
@@ -625,6 +650,7 @@ uint32_t CortexM3::addWithCarry(uint32_t x, uint32_t y, uint32_t carryIn, bool s
 void CortexM3::branchTo(uint32_t address) {
   nextPc_ = address & ~1u;
   cycles_ += 2;
+  prefetchFlush_ = true;
 }
 
 // Branchement direct. S'il revient en arrière au même endroit que la fois
@@ -671,30 +697,75 @@ void CortexM3::bxWritePc(uint32_t address) {
 }
 
 void CortexM3::step() {
-  uint32_t hw1;
-  {
-    const uint32_t o = pc_ - kFlashBase;
-    if (o <= flashSize_ - 2) { uint16_t v; std::memcpy(&v, &flash_[o], 2); hw1 = v; }
-    else hw1 = read16(pc_);
+  uint32_t hw1, hw2 = 0;
+  const uint32_t o = pc_ - kFlashBase;
+  const bool inFlash = o <= flashSize_ - 4;
+  if (inFlash) {
+    uint16_t v[2];
+    std::memcpy(v, &flash_[o], 4);
+    hw1 = v[0];
+    hw2 = v[1];
+  } else {
+    hw1 = read16(pc_);
+    if (hw1 >= 0xe800) hw2 = read16(pc_ + 2);
   }
+  const uint32_t size = hw1 < 0xe800 ? 2 : 4;
+
+  // Attente de la flash : l'instruction ne peut pas commencer avant que tous ses
+  // octets aient été lus.
+  if (flashWait_ && inFlash) {
+    const uint32_t first = pc_ >> 3;
+    const uint32_t last = (pc_ + size - 1) >> 3;
+    const uint64_t access = 1 + flashWait_;
+    if (prefetchFlush_) {
+      // Après un branchement : le mot visé part en lecture à la fin du branchement.
+      prefetchFlush_ = false;
+      prefetchWord_ = first;
+      prefetchReady_ = cycles_ + flashWait_;
+      currentWord_ = first;
+      enteredCurrent_ = enteredPrevious_ = cycles_;
+    } else if (first != currentWord_) {
+      enteredPrevious_ = enteredCurrent_;
+      enteredCurrent_ = cycles_;
+      currentWord_ = first;
+    }
+    while (prefetchWord_ < last) {
+      ++prefetchWord_;
+      uint64_t start = prefetchReady_;
+      if (flashPrefetch_) {
+        // Deux mots d'avance au plus : le mot w n'est lu qu'une fois le
+        // processeur arrivé au mot w - 2.
+        const uint32_t gate = prefetchWord_ - 2;
+        const uint64_t entered = gate == currentWord_ ? enteredCurrent_
+                               : (gate + 1 == currentWord_ ? enteredPrevious_ : 0);
+        start = std::max(start, entered);
+      } else {
+        start = std::max(start, cycles_);   // sans lecture anticipée : à la demande
+      }
+      prefetchReady_ = start + access;
+    }
+    if (prefetchWord_ == last && prefetchReady_ > cycles_) cycles_ = prefetchReady_;
+  }
+
   ++cycles_;
   ++instructions_;
+  previousAccess_ = pipelinedAccess_;
+  pipelinedAccess_ = false;
 
   const uint32_t it = itstate_;
   if (it) {
     itstate_ = (it & 7) ? ((it & 0xe0) | ((it << 1) & 0x1f)) : 0;
   }
 
-  if (hw1 < 0xe800) {
+  if (size == 2) {
     nextPc_ = pc_ + 2;
     if (!it || conditionPassed(it >> 4)) {
       inIt_ = it != 0;
       exec16(hw1);
     }
   } else {
-    const uint32_t insn = (hw1 << 16) | read16(pc_ + 2);
     nextPc_ = pc_ + 4;
-    if (!it || conditionPassed(it >> 4)) exec32(insn);
+    if (!it || conditionPassed(it >> 4)) exec32((hw1 << 16) | hw2);
   }
   pc_ = nextPc_;
 }
@@ -784,7 +855,7 @@ void CortexM3::exec16(uint32_t insn) {
     }
     case 9:  // LDR littéral
       r_[(insn >> 8) & 7] = read32(((pc_ + 4) & ~3u) + ((insn & 0xff) << 2));
-      ++cycles_;
+      accessCycle();
       break;
     case 10: case 11: {  // chargement / rangement avec décalage registre
       const uint32_t address = r_[(insn >> 3) & 7] + r_[(insn >> 6) & 7];
@@ -799,17 +870,17 @@ void CortexM3::exec16(uint32_t insn) {
         case 6: r_[rt] = read8(address); break;
         default: r_[rt] = static_cast<uint32_t>(static_cast<int16_t>(read16(address))); break;
       }
-      ++cycles_;
+      accessCycle();
       break;
     }
-    case 12: write32(r_[(insn >> 3) & 7] + (((insn >> 6) & 31) << 2), r_[insn & 7]); ++cycles_; break;
-    case 13: r_[insn & 7] = read32(r_[(insn >> 3) & 7] + (((insn >> 6) & 31) << 2)); ++cycles_; break;
-    case 14: write8(r_[(insn >> 3) & 7] + ((insn >> 6) & 31), r_[insn & 7]); ++cycles_; break;
-    case 15: r_[insn & 7] = read8(r_[(insn >> 3) & 7] + ((insn >> 6) & 31)); ++cycles_; break;
-    case 16: write16(r_[(insn >> 3) & 7] + (((insn >> 6) & 31) << 1), r_[insn & 7]); ++cycles_; break;
-    case 17: r_[insn & 7] = read16(r_[(insn >> 3) & 7] + (((insn >> 6) & 31) << 1)); ++cycles_; break;
-    case 18: write32(r_[13] + ((insn & 0xff) << 2), r_[(insn >> 8) & 7]); ++cycles_; break;
-    case 19: r_[(insn >> 8) & 7] = read32(r_[13] + ((insn & 0xff) << 2)); ++cycles_; break;
+    case 12: write32(r_[(insn >> 3) & 7] + (((insn >> 6) & 31) << 2), r_[insn & 7]); accessCycle(); break;
+    case 13: r_[insn & 7] = read32(r_[(insn >> 3) & 7] + (((insn >> 6) & 31) << 2)); accessCycle(); break;
+    case 14: write8(r_[(insn >> 3) & 7] + ((insn >> 6) & 31), r_[insn & 7]); accessCycle(); break;
+    case 15: r_[insn & 7] = read8(r_[(insn >> 3) & 7] + ((insn >> 6) & 31)); accessCycle(); break;
+    case 16: write16(r_[(insn >> 3) & 7] + (((insn >> 6) & 31) << 1), r_[insn & 7]); accessCycle(); break;
+    case 17: r_[insn & 7] = read16(r_[(insn >> 3) & 7] + (((insn >> 6) & 31) << 1)); accessCycle(); break;
+    case 18: write32(r_[13] + ((insn & 0xff) << 2), r_[(insn >> 8) & 7]); accessCycle(); break;
+    case 19: r_[(insn >> 8) & 7] = read32(r_[13] + ((insn & 0xff) << 2)); accessCycle(); break;
     case 20: r_[(insn >> 8) & 7] = ((pc_ + 4) & ~3u) + ((insn & 0xff) << 2); break;
     case 21: r_[(insn >> 8) & 7] = r_[13] + ((insn & 0xff) << 2); break;
     case 22: case 23: {
@@ -1120,7 +1191,7 @@ void CortexM3::execLoadStoreSingle(uint32_t insn) {
     return;
   }
 
-  ++cycles_;
+  accessCycle();
   if (load) {
     if (rt == 15) {
       if (size != 2) return;  // PLD / PLI : sans effet

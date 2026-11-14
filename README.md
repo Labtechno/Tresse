@@ -43,8 +43,11 @@ les six potards (FINE, COARSE, FM, TIMBRE, MODULATION, COLOR) et les six jacks.
 - **Menu** : c'est celui du firmware. Comme sur le module, les réglages sont écrits
   en flash quand tu reviens sur WAVE.
 - **Processeur du module** : en haut à droite, la part du temps pendant laquelle
-  le processeur du module travaille. Près de 100 %, un vrai module décrocherait.
-  Cette mesure est encore sous-estimée (voir Limites).
+  le processeur du module travaille. À 100 %, le firmware n'arrive plus à calculer
+  le son à temps : il rejoue de vieux morceaux de son (bégaiement, craquements)
+  et l'encodeur ne répond presque plus, comme sur le module. Avec le firmware
+  d'origine, les modèles vont d'environ 50 % à 88 % (le plus lourd : les trois
+  carrés désaccordés). C'est une estimation : voir Limites.
 
 Comme le module, **Tresses sonne en continu**. Pour des notes détachées, active
 l'enveloppe interne sur le volume (`|\VCA` dans le menu) ou utilise un VCA de Reason.
@@ -132,6 +135,7 @@ cmake --build build-tools
 build-tools/tresses_machine_test firmware/bin/braids-1.9.bin boot      # démarrage, menu, flash, CAL
 build-tools/tresses_machine_test firmware/bin/braids-1.9.bin compare   # audio contre la référence
 build-tools/tresses_machine_test un_firmware.wav load                  # lecture d'un fichier + CAL
+build-tools/tresses_machine_test un_firmware.wav cpu                   # charge du processeur, modèle par modèle, et surcharge
 ```
 
 - **Processeur** : 566 instructions comparées à QEMU, la bibliothèque C et les 47
@@ -145,6 +149,13 @@ build-tools/tresses_machine_test un_firmware.wav load                  # lecture
   décalage de plus de 32 bits, dont le résultat dépend du processeur. La version
   recompilée pour PC se trompe ; l'émulateur donne le résultat d'un vrai ARM.
 
+- **Charge du processeur** : avec le firmware d'origine, aucun des 47 modèles ne
+  dépasse 100 % (de 51 % à 88 % selon le modèle, la hauteur et les réglages), ce qui
+  correspond au module, qui les joue tous sans décrocher. En ralentissant
+  artificiellement la mémoire du processeur, la jauge monte à 100 % et le son
+  bégaie exactement comme le prévoit le code du firmware (4 blocs de 24
+  échantillons rejoués).
+
 ---
 
 ## Limites actuelles
@@ -155,8 +166,14 @@ build-tools/tresses_machine_test un_firmware.wav load                  # lecture
 - **Seulement des firmwares pour Braids** (image d'application à l'adresse
   0x08004000). Le bootloader du module n'est pas émulé : Tresses décode lui-même
   le `.wav`.
-- **Charge du processeur sous-estimée** : les temps d'attente de la mémoire flash du
-  STM32 ne sont pas encore comptés.
+- **Charge du processeur : une estimation, pas une mesure.** Les durées des
+  instructions suivent le manuel du Cortex-M3 et les temps d'attente de la mémoire
+  flash suivent la documentation du STM32F103, mais les détails internes de la puce
+  ne sont pas publiés. La jauge n'a pas encore été comparée à un vrai Braids : il
+  faut compter quelques points d'écart. Un firmware qui affiche 70 % passera sur le
+  module ; un firmware à 97 % est à vérifier sur le vrai module.
+- **Bees-in-the-Trees compilé ici** : ses sources sont réglées pour un encodeur qui
+  tourne à l'envers ; dans Tresses l'encodeur est donc inversé avec ce fichier-là.
 - **Calcul** : l'émulation est gourmande (une part notable d'un cœur par instance).
   L'optimisation est prévue.
 - **Réouverture d'un projet** : le module redémarre (animation comprise) et les

@@ -3,6 +3,7 @@
 //   machine_test <firmware.bin> boot      démarrage, menu, sauvegarde en flash
 //   machine_test <firmware.bin> compare   audio comparé à la version compilée (référence)
 //   machine_test <firmware.bin> speed     vitesse de l'émulation
+//   machine_test <firmware.bin> cpu       charge du processeur du module, et surcharge
 //
 // La référence est le même firmware recompilé pour l'ordinateur (Source/hw).
 
@@ -370,6 +371,15 @@ int main(int argc, char** argv) {
     FILE* f = std::fopen(argv[3], "wb");
     std::fwrite(m.machine.flashImage() + emu::BraidsMachine::kFlashSize - 16384, 1, 16384, f);
     std::fclose(f);
+  } else if (cmd == "poke") {
+    // Exploration de l'interface d'un firmware inconnu.
+    Emulated m(firmware, font);
+    for (int i = 0; i < 8; ++i) { m.ms(250); std::printf("[%s] ", m.display().c_str()); }
+    std::printf("\ntours : ");
+    for (int i = 0; i < 6; ++i) { m.turn(1); m.ms(200); std::printf("[%s] ", m.display().c_str()); }
+    std::printf("\nclic : "); m.click(); m.ms(200); std::printf("[%s] ", m.display().c_str());
+    for (int i = 0; i < 6; ++i) { m.turn(1); m.ms(200); std::printf("[%s] ", m.display().c_str()); }
+    std::printf("\n");
   } else if (cmd == "speed") {
     Emulated m(firmware, font);
     m.ms(600);
@@ -384,6 +394,77 @@ int main(int argc, char** argv) {
                   m.display().c_str(), s, 100.0 * s / 3.0, 100.0 * busy);
       m.turn(-model);
     }
+  } else if (cmd == "cpu") {
+    // Charge du processeur du module, modèle par modèle, à plusieurs hauteurs et
+    // réglages. Sur le vrai module, aucun modèle d'origine ne décroche : ici la
+    // charge doit donc rester sous 100 %.
+    Emulated m(firmware, font);
+    m.ms(600);
+    auto loadOver = [&](int samples) {
+      const uint64_t c0 = m.machine.cycles(), i0 = m.machine.cpu().idleCycles();
+      m.run(samples);
+      return 1.0 - static_cast<double>(m.machine.cpu().idleCycles() - i0) / static_cast<double>(m.machine.cycles() - c0);
+    };
+    const int count = argc > 3 ? std::atoi(argv[3]) : 47;
+    double worst = 0.0; std::string worstName; int worstModel = 0;
+    // Certains firmwares (Bees) sont compilés pour un encodeur qui tourne à l'envers.
+    int dir = 1;
+    { const std::string first = m.display(); m.turn(1); if (m.display() == first) dir = -1; else m.turn(-1); }
+    for (int model = 0; model < count; ++model) {
+      const std::string name = m.display();
+      double lo = 1.0, hi = 0.0;
+      for (float voct : { 0.0f, 2.0f, 4.0f, 6.0f }) {
+        for (float knobs : { 0.0f, 0.5f, 1.0f }) {
+          m.jacks.voct = voct; m.panel.timbre = knobs; m.panel.color = knobs;
+          m.jacks.trig = true; m.ms(5); m.jacks.trig = false; m.ms(15);
+          const double l = loadOver(9600);
+          lo = std::min(lo, l); hi = std::max(hi, l);
+        }
+      }
+      std::printf("  [%s] %3.0f a %3.0f %%\n", name.c_str(), 100.0 * lo, 100.0 * hi);
+      if (hi > worst) { worst = hi; worstName = name; worstModel = model; }
+      m.jacks.voct = 0.0f; m.panel.timbre = m.panel.color = 0.5f;
+      m.turn(dir);
+    }
+    std::printf("Modele le plus lourd : [%s] %.0f %%\n", worstName.c_str(), 100.0 * worst);
+    expect(worst < 0.995, "aucun modele ne depasse la puissance du module");
+    expect(worst > 0.5, "les modeles lourds chargent nettement le processeur");
+
+    // Surcharge : on ralentit artificiellement la flash jusqu'à ce que le modèle
+    // le plus lourd ne tienne plus, et on regarde ce que devient le son.
+    std::printf("Surcharge (modele [%s], flash ralentie) :\n", worstName.c_str());
+    bool sawOverload = false, cleanAtStock = false;
+    for (int wait : { 2, 3, 4, 6, 9 }) {
+      Emulated o(firmware, font);
+      o.machine.setFlashWaitOverride(wait);
+      o.machine.powerOn();
+      o.ms(600);
+      o.turn(dir * worstModel);
+      o.jacks.voct = 2.0f; o.panel.timbre = o.panel.color = 1.0f;
+      o.ms(100);
+      const uint64_t c0 = o.machine.cycles(), i0 = o.machine.cpu().idleCycles();
+      std::vector<float> x(96000);
+      o.run(96000, x.data());
+      const double l = 1.0 - static_cast<double>(o.machine.cpu().idleCycles() - i0) / static_cast<double>(o.machine.cycles() - c0);
+      // Le firmware garde 4 blocs de 24 échantillons. Quand le rendu ne suit plus,
+      // la lecture le rattrape et rejoue du son vieux de 96 échantillons.
+      int repeated = 0, run = 0; bool flat = true;
+      for (size_t i = 96; i < x.size(); ++i) {
+        if (x[i] == x[i - 96]) {
+          if (run > 0 && x[i] != x[i - 1]) flat = false;
+          ++run;
+        } else {
+          if (run >= 4 && !flat) repeated += run;
+          run = 0; flat = true;
+        }
+      }
+      std::printf("  %2d cycles d'attente : processeur a %3.0f %%, %4.1f %% du son est du vieux son rejoue%s\n", wait,
+                  100.0 * l, 100.0 * repeated / static_cast<double>(x.size()), o.machine.crashed() ? ", firmware plante" : "");
+      if (wait == 2 && repeated == 0) cleanAtStock = true;
+      if (l > 0.97 && repeated > 2000) sawOverload = true;
+    }
+    expect(cleanAtStock, "au reglage du firmware : aucun son rejoue");
+    expect(sawOverload, "processeur trop lent : jauge a 100 % et le son begaie, comme sur le module");
   }
   std::printf(failures == 0 ? "OK\n" : "ECHECS : %d\n", failures);
   return failures;

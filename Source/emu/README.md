@@ -8,7 +8,7 @@ Tresses, en émulant le STM32F103 du module au lieu de recompiler le code source
 | 1 | Processeur Cortex-M3 (`CortexM3.*`) : instructions Thumb/Thumb-2, exceptions, NVIC, SysTick, comptage des cycles | fait |
 | 2 | Périphériques du STM32F103 et carte Braids (`BraidsMachine.*`), firmware complet, plugin branché dessus | fait |
 | 3 | Chargement de fichiers `.bin` et `.wav` depuis l'interface, calibration automatique, réglages par firmware, firmware enregistré dans le projet | fait |
-| 4 | Temps d'accès à la flash, jauge de charge, craquements réalistes | à faire |
+| 4 | Temps d'accès à la flash, jauge de charge, craquements réalistes | fait |
 | 5 | Autres firmwares, optimisation, compilation sur GitHub | à faire |
 
 ## Vérifier le module complet
@@ -38,6 +38,16 @@ n'y a aucun code de QEMU dans Tresses.
 - **braids_dsp** : les 47 modèles de Braids compilés avec les options du firmware ;
   références : l'ordinateur et QEMU.
 
-Les durées d'instructions suivent le manuel du Cortex-M3. Les temps d'attente de la
-flash ne sont pas encore pris en compte (étape 4) : les mesures de cycles sont donc
-sous-estimées pour l'instant.
+Les durées d'instructions suivent le manuel du Cortex-M3 (avec le chevauchement des
+chargements/rangements qui se suivent).
+
+Mémoire flash du STM32F103 : le firmware règle lui-même le registre FLASH_ACR
+(2 cycles d'attente à 72 MHz, lecture anticipée activée) et l'émulateur en tient
+compte : lecture par blocs de 64 bits en 1 + N cycles, deux blocs d'avance au plus,
+N cycles perdus à chaque branchement pris et à chaque lecture de donnée en flash.
+C'est un modèle construit sur la documentation (RM0008, PM0075), pas une mesure de
+la puce. Il n'a pas encore été recalé sur un vrai module.
+
+`tresses_machine_test <firmware> cpu` donne la charge modèle par modèle, vérifie
+qu'aucun ne dépasse 100 %, puis ralentit la flash (`setFlashWaitOverride`) pour
+vérifier le comportement en surcharge.

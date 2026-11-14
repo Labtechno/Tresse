@@ -63,6 +63,15 @@ class CortexM3 {
   // Le processeur est bloqué pendant `cycles` (écriture en flash, par exemple).
   void stall(uint64_t cycles) { cycles_ += cycles; }
 
+  // Temps d'accès de la mémoire flash, tels que le firmware les programme dans le
+  // registre FLASH_ACR : nombre de cycles d'attente par lecture (2 à 72 MHz sur un
+  // STM32F103) et tampon de lecture anticipée. 0 cycle d'attente = flash idéale.
+  void setFlashTiming(uint32_t waitStates, bool prefetch) {
+    flashWait_ = waitStates;
+    flashPrefetch_ = prefetch;
+    prefetchFlush_ = true;
+  }
+
   // Interruptions externes (numéro d'IRQ du STM32, 0..67).
   void setIrqPending(int irq, bool pending);
 
@@ -172,6 +181,24 @@ class CortexM3 {
   uint64_t nextEvent_ = ~uint64_t { 0 };
 
   bool exclusive_ = false;
+
+  // Modèle de la flash (voir step() et flashDataRead()).
+  uint32_t flashWait_ = 0;
+  bool flashPrefetch_ = true;
+  bool prefetchFlush_ = true;       // un branchement a vidé le tampon de lecture anticipée
+  uint32_t prefetchWord_ = 0;       // dernier mot de 32 bits lu (ou en cours de lecture)
+  uint64_t prefetchReady_ = 0;      // cycle où ce mot est disponible
+  uint32_t currentWord_ = 0;        // mot où se trouve l'instruction en cours
+  uint64_t enteredCurrent_ = 0, enteredPrevious_ = 0;
+  bool pipelinedAccess_ = false;    // l'instruction précédente était un chargement/rangement simple
+  bool previousAccess_ = false;
+  void flashDataRead();
+  // Cycle de donnée d'un chargement/rangement simple, absorbé si l'instruction
+  // précédente en était un aussi.
+  void accessCycle() {
+    if (!previousAccess_) ++cycles_;
+    pipelinedAccess_ = true;
+  }
 
   // Détection des boucles d'attente (voir idleCycles()).
   struct LoopSnapshot {
