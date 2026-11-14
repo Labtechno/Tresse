@@ -145,6 +145,7 @@ build-tools/tresses_machine_test firmware/bin/braids-1.9.bin boot      # démarr
 build-tools/tresses_machine_test firmware/bin/braids-1.9.bin compare   # audio contre la référence
 build-tools/tresses_machine_test un_firmware.wav load                  # lecture d'un fichier + CAL
 build-tools/tresses_machine_test un_firmware.wav cpu                   # charge du processeur, modèle par modèle, et surcharge
+build-tools/tresses_knob_map docs/carte-potards-brut.csv              # influence de TIMBRE et COLOR, modèle par modèle
 ```
 
 - **Processeur** : 566 instructions comparées à QEMU, la bibliothèque C et les 47
